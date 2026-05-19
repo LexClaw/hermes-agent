@@ -1030,7 +1030,10 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
     needs_save = False
 
     for job in jobs:
-        # Isolate malformed rows so one bad job cannot abort the whole tick.
+        # SIE Phase 5 Part B (2026-05-16): per-job exception isolation.
+        # A single malformed job, e.g. `schedule` as a raw string, used to
+        # abort the entire tick. Wrap the per-job body so one bad row marks
+        # itself state=error and the queue continues processing.
         try:
             if not job.get("enabled", True):
                 continue
@@ -1051,7 +1054,8 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
                 # Recurring jobs reach here only when something, typically a
                 # direct jobs.json edit that bypassed add_job(), left
                 # next_run_at unset. Without this branch, such jobs are
-                # silently skipped forever.
+                # silently skipped forever; recompute next_run_at from the
+                # schedule so they pick up at their next scheduled tick.
                 if not recovered_next and kind in {"cron", "interval"}:
                     recovered_next = compute_next_run(schedule, now.isoformat())
                     if recovered_next:
@@ -1084,7 +1088,7 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
                 # the next future occurrence instead of firing a stale run.
                 grace = _compute_grace_seconds(schedule)
                 if kind in {"cron", "interval"} and (now - next_run_dt).total_seconds() > grace:
-                    # Job is past its catch-up grace window, this is a stale missed run.
+                    # Job is past its catch-up grace window: this is a stale missed run.
                     # Grace scales with schedule period: daily=2h, hourly=30m, 10min=5m.
                     new_next = compute_next_run(schedule, now.isoformat())
                     if new_next:

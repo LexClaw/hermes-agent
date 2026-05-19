@@ -2017,6 +2017,10 @@ def tick(verbose: bool = True, adapters=None, loop=None, sync: bool = True) -> i
         # For parallel jobs that are already running, advance_next_run keeps
         # bumping next_run_at forward so the grace window never expires.
         # mark_job_run() overwrites next_run_at on completion.
+        # SIE Phase 5 Part B: per-job exception isolation here too.
+        # advance_next_run() can raise on a malformed schedule that survived
+        # due-collection. Wrap per-job: on exception, mark state=error,
+        # remove from due list, and continue.
         advanced_due = []
         for job in due_jobs:
             try:
@@ -2039,6 +2043,7 @@ def tick(verbose: bool = True, adapters=None, loop=None, sync: bool = True) -> i
                         job.get("id", "?"),
                         me,
                     )
+                # NOTE: do NOT append to advanced_due. Job will not execute this tick.
                 continue
         due_jobs = advanced_due
 
