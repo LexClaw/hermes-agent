@@ -2953,29 +2953,30 @@ class TelegramAdapter(BasePlatformAdapter):
     async def _handle_routing_rec_callback(
         self, query: Any, data: str
     ) -> None:
-        """Resolve a TJ tap on a routing-intel recommendation.
+        """Resolve a TJ tap on a routing-intel recommendation (Phase 3 v1.3).
 
         callback_data shape: routing-rec:{recommendation_id}:{action}
-        action ∈ {approve, skip, defer}
+        action ∈ {veto, override, promote, decline}
 
-        Appends a status-change row to
-        ~/hermes-workspace/Lex-Workspace/sie/routing-intel/approvals.jsonl
-        via the Lex-Workspace ale_atomic.atomic_append_jsonl primitive (run as
-        a subprocess so the gateway venv doesn't need Lex-Workspace deps).
+        STATE-MACHINE CONVENTION (append-only event log):
+        Every transition appends a NEW row to approvals.jsonl. Readers compute
+        "current state" by reading the newest matching row per recommendation_id.
+        We NEVER mutate rows in place.
 
-        Edits the originating Telegram message to remove the keyboard and
-        show TJ's choice. On 'defer', files an MC card via
-        scripts/file-mc-card.py (best-effort, non-blocking on failure).
+        Pre-condition matrix per action (latest-row-wins on approvals.jsonl):
+          veto      -> latest event=approved AND now <= veto_window_ends_at
+                       (else vetoed_too_late row for forensics, or no-op if already vetoed)
+          override  -> latest event=skipped
+          promote   -> latest event=verdict_emitted with verdict_outcome=KEEP;
+                       mints /tmp sentinel token + invokes hit-routing-intel-promote
+          decline   -> latest event=verdict_emitted; also appends a cooldowns.jsonl row
 
-        Idempotent — multiple taps record multiple status-change rows, latest
-        wins per the consumer (Phase D/E reads with "latest row for
-        recommendation_id"). Telegram itself collapses rapid taps to one
-        callback per button.
+        Idempotent: re-tapping any action that already happened is a no-op + log.
         """
         import os
         import subprocess
         import json as _json
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, timedelta
         from pathlib import Path
 
         parts = data.split(":", 2)
@@ -2984,7 +2985,7 @@ class TelegramAdapter(BasePlatformAdapter):
             return
         rec_id = parts[1]
         action = parts[2]
-        if action not in ("approve", "skip", "defer"):
+        if action not in ("veto", "override", "promote", "decline"):
             await query.answer(text=f"Unknown action: {action}")
             return
 
@@ -3014,93 +3015,220 @@ class TelegramAdapter(BasePlatformAdapter):
         # Resolve approvals.jsonl path. Lex-Workspace canonical location.
         workspace = Path(os.path.expanduser("~/hermes-workspace/Lex-Workspace"))
         approvals = workspace / "sie/routing-intel/approvals.jsonl"
+        cooldowns = workspace / "sie/routing-intel/cooldowns.jsonl"
         approvals.parent.mkdir(parents=True, exist_ok=True)
 
-        status_map = {"approve": "approved", "skip": "skipped", "defer": "deferred"}
-        new_status = status_map[action]
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        # Ensure ale_atomic is importable + grab the append primitive once.
+        import sys as _sys
+        scripts_dir = str(workspace / "scripts")
+        if scripts_dir not in _sys.path:
+            _sys.path.insert(0, scripts_dir)
+        try:
+            from ale_atomic import atomic_append_jsonl as _append  # type: ignore
+        except Exception as imp_exc:
+            logger.error("[routing-rec] cannot import ale_atomic from %s: %s", scripts_dir, imp_exc)
+            await query.answer(text="⚠️ Append primitive unavailable; check gateway.log")
+            return
+
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat().replace("+00:00", "Z")
         user_display = getattr(query.from_user, "first_name", "User")
 
-        row = {
-            "recommendation_id": rec_id,
-            "status": new_status,
-            "decided_at": now,
-            "decided_by": user_display,
-            "decided_by_id": caller_id,
-            "source": "telegram-callback",
-        }
-
-        # Atomic append via Lex-Workspace ale_atomic primitive. We invoke it
-        # in-process when possible (Lex-Workspace scripts dir is usually on
-        # PYTHONPATH for gateway too); fall back to subprocess otherwise.
-        import sys
-        wrote = False
-        try:
-            import sys
-            scripts_dir = str(workspace / "scripts")
-            if scripts_dir not in sys.path:
-                sys.path.insert(0, scripts_dir)
-            from ale_atomic import atomic_append_jsonl  # type: ignore
-            atomic_append_jsonl(str(approvals), row)
-            wrote = True
-        except Exception as imp_exc:
-            logger.warning("[routing-rec] in-process append failed (%s); falling back to subprocess", imp_exc)
-            try:
-                py = sys.executable
-                code = (
-                    "import sys; sys.path.insert(0, %r); "
-                    "from ale_atomic import atomic_append_jsonl; "
-                    "import json; atomic_append_jsonl(%r, json.loads(%r))"
-                ) % (str(workspace / "scripts"), str(approvals), _json.dumps(row))
-                result = subprocess.run([py, "-c", code], capture_output=True, text=True, timeout=10)
-                wrote = result.returncode == 0
-                if not wrote:
-                    logger.error("[routing-rec] subprocess append failed: %s", result.stderr)
-            except Exception as sub_exc:  # noqa: BLE001
-                logger.error("[routing-rec] subprocess append also failed: %s", sub_exc)
-
-        if not wrote:
-            await query.answer(text="⚠️ Recorded in Telegram but file-write failed; check logs")
-        else:
-            label_map = {"approved": "✅ Approved", "skipped": "⏭ Skipped", "deferred": "📋 Deferred to MC"}
-            await query.answer(text=label_map[new_status])
-
-        # Edit message to remove buttons and reflect the decision.
-        try:
-            original_text = ""
-            try:
-                original_text = getattr(query.message, "text", "") or ""
-            except Exception:
-                pass
-            suffix = f"\n\n— {label_map.get(new_status, new_status)} by {user_display}"
-            new_text = (original_text[: TELEGRAM_TEXT_LIMIT - len(suffix) - 10] + suffix) if original_text else suffix
-            await query.edit_message_text(
-                text=new_text,
-                parse_mode=None,
-                reply_markup=None,
-            )
-        except Exception as edit_exc:  # noqa: BLE001
-            logger.warning("[routing-rec] edit_message_text failed (non-fatal): %s", edit_exc)
-
-        # On defer: file an MC card. Best-effort, non-blocking.
-        if new_status == "deferred":
-            mc_script = workspace / "scripts/file-mc-card.py"
-            if mc_script.exists():
+        # --- Read the append-only event log; compute latest row per rec_id. ---
+        def _latest_row_for(rid: str) -> Optional[Dict[str, Any]]:
+            if not approvals.exists():
+                return None
+            latest: Optional[Dict[str, Any]] = None
+            for line in approvals.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
                 try:
-                    subprocess.Popen(
-                        [
-                            sys.executable, str(mc_script),
-                            "--status", "proposed",
-                            "--lane", "routing-proposals",
-                            "--title", f"Routing recommendation deferred: {rec_id}",
-                            "--tags", f"routing-intel,recommendation_id:{rec_id}",
-                        ],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    )
-                except Exception as mc_exc:  # noqa: BLE001
-                    logger.warning("[routing-rec] MC card filing failed (non-fatal): %s", mc_exc)
-            else:
-                logger.info("[routing-rec] defer requested but %s missing; skipping MC card", mc_script)
+                    r = _json.loads(line)
+                except Exception:
+                    continue
+                if r.get("recommendation_id") == rid:
+                    latest = r  # append-only: last-seen wins
+            return latest
+
+        def _parse_ts(value: Any) -> Optional[datetime]:
+            if not isinstance(value, str):
+                return None
+            try:
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+
+        latest = _latest_row_for(rec_id)
+        latest_event = (latest or {}).get("event") if latest else None
+
+        original_text = ""
+        try:
+            original_text = getattr(query.message, "text", "") or ""
+        except Exception:
+            pass
+
+        async def _edit_with_suffix(suffix: str) -> None:
+            try:
+                new_text = (original_text + suffix)[:4000] if original_text else suffix
+                await query.edit_message_text(text=new_text, parse_mode=None, reply_markup=None)
+            except Exception as edit_exc:  # noqa: BLE001
+                logger.warning("[routing-rec] edit_message_text failed (non-fatal): %s", edit_exc)
+
+        # ─── action: veto ─────────────────────────────────────────────────
+        if action == "veto":
+            if latest_event == "vetoed":
+                logger.info("[routing-rec] rec %s already vetoed; no-op", rec_id)
+                await query.answer(text="Already vetoed")
+                return
+            if latest_event != "approved":
+                await query.answer(text=f"Cannot veto: state={latest_event or 'none'}")
+                return
+            window_end = _parse_ts((latest or {}).get("veto_window_ends_at"))
+            if window_end is not None and now_dt > window_end:
+                _append(str(approvals), {
+                    "recommendation_id": rec_id,
+                    "event": "vetoed_too_late",
+                    "attempted_at": now,
+                    "attempted_by": user_display,
+                    "attempted_by_id": caller_id,
+                    "veto_window_ends_at": (latest or {}).get("veto_window_ends_at"),
+                })
+                await query.answer(text="Veto window closed")
+                await _edit_with_suffix(
+                    f"\n\nVeto window closed at {(latest or {}).get('veto_window_ends_at', '?')}."
+                )
+                return
+            _append(str(approvals), {
+                "recommendation_id": rec_id,
+                "event": "vetoed",
+                "vetoed_at": now,
+                "vetoed_by": user_display,
+                "vetoed_by_id": caller_id,
+            })
+            await query.answer(text="🛑 Vetoed")
+            await _edit_with_suffix(f"\n\nVETOED by {user_display} at {now}.")
+            return
+
+        # ─── action: override ─────────────────────────────────────────────
+        if action == "override":
+            if latest_event == "approved" and (latest or {}).get("approved_by") == "tj_override":
+                await query.answer(text="Already overridden")
+                return
+            if latest_event != "skipped":
+                await query.answer(text=f"Cannot override: state={latest_event or 'none'}")
+                return
+            veto_window_ends_at = (now_dt + timedelta(hours=12)).isoformat().replace("+00:00", "Z")
+            _append(str(approvals), {
+                "recommendation_id": rec_id,
+                "event": "approved",
+                "approved_at": now,
+                "approved_by": "tj_override",
+                "approved_by_id": caller_id,
+                "veto_window_ends_at": veto_window_ends_at,
+                # Carry forward design context for downstream readers.
+                "rank": (latest or {}).get("rank"),
+                "title": (latest or {}).get("title"),
+                "estimated_cost_delta_usd": (latest or {}).get("estimated_cost_delta_usd"),
+                "proposed_n_per_arm": (latest or {}).get("proposed_n_per_arm"),
+                "experiment_design": (latest or {}).get("experiment_design") or {},
+            })
+            await query.answer(text="✳️ Overridden")
+            await _edit_with_suffix(f"\n\nOVERRIDDEN by {user_display}; experiment starting.")
+            return
+
+        # ─── action: promote ──────────────────────────────────────────────
+        if action == "promote":
+            if latest_event == "promoted":
+                await query.answer(text="Already promoted")
+                return
+            if latest_event != "verdict_emitted":
+                await query.answer(text=f"Cannot promote: state={latest_event or 'none'}")
+                return
+            if (latest or {}).get("verdict_outcome") != "KEEP":
+                await query.answer(text="Promote requires verdict_outcome=KEEP")
+                return
+            # Mint /tmp sentinel token, O_EXCL | O_CREAT
+            import secrets
+            ulid_body = "".join(secrets.choice("0123456789ABCDEFGHJKMNPQRSTVWXYZ") for _ in range(12))
+            token_path = f"/tmp/sie-promote-token-{rec_id}-{ulid_body}"
+            try:
+                fd = os.open(token_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                try:
+                    payload = f"{rec_id}:{int(now_dt.timestamp())}"
+                    os.write(fd, payload.encode())
+                finally:
+                    os.close(fd)
+            except FileExistsError:
+                await query.answer(text="Token collision; retry")
+                return
+            except OSError as mint_exc:
+                logger.error("[routing-rec] token mint failed: %s", mint_exc)
+                await query.answer(text="Token mint failed; check gateway.log")
+                return
+            promote_script = workspace / "scripts/sie/hit-routing-intel-promote"
+            try:
+                result = subprocess.run(
+                    [
+                        _sys.executable, str(promote_script),
+                        "--recommendation-id", rec_id,
+                        "--token-file", token_path,
+                    ],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if result.returncode == 0:
+                    await query.answer(text="🚀 Promoted")
+                    await _edit_with_suffix(f"\n\nPROMOTED by {user_display} at {now}.")
+                else:
+                    stderr_first = (result.stderr or "").splitlines()[0] if result.stderr else "(no stderr)"
+                    logger.error("[routing-rec] promote failed rc=%s: %s", result.returncode, result.stderr)
+                    await query.answer(text=f"Promote failed: {stderr_first[:50]}")
+                    await _edit_with_suffix(f"\n\nPROMOTE failed: {stderr_first[:200]}")
+            except FileNotFoundError:
+                logger.error("[routing-rec] promote script missing: %s", promote_script)
+                await query.answer(text="Promote script missing")
+                await _edit_with_suffix(f"\n\nPROMOTE failed: script {promote_script} not found.")
+            except subprocess.TimeoutExpired:
+                logger.error("[routing-rec] promote subprocess timed out for %s", rec_id)
+                await query.answer(text="Promote timeout")
+                await _edit_with_suffix("\n\nPROMOTE failed: subprocess timeout.")
+            except Exception as promote_exc:  # noqa: BLE001
+                logger.exception("[routing-rec] promote subprocess errored: %s", promote_exc)
+                await query.answer(text="Promote errored; check gateway.log")
+            return
+
+        # ─── action: decline ──────────────────────────────────────────────
+        if action == "decline":
+            if latest_event == "declined":
+                await query.answer(text="Already declined")
+                return
+            if latest_event != "verdict_emitted":
+                await query.answer(text=f"Cannot decline: state={latest_event or 'none'}")
+                return
+            design = (latest or {}).get("experiment_design") or {}
+            _append(str(approvals), {
+                "recommendation_id": rec_id,
+                "event": "declined",
+                "declined_at": now,
+                "declined_by": user_display,
+                "declined_by_id": caller_id,
+            })
+            _append(str(cooldowns), {
+                "recommendation_id": rec_id,
+                "agent": design.get("agent", ""),
+                "task_type": design.get("task_type", ""),
+                "candidate_model": design.get("candidate_model", ""),
+                "outcome": "declined",
+                "recorded_at": now,
+            })
+            await query.answer(text="🙅 Declined")
+            await _edit_with_suffix(
+                f"\n\nDECLINED by {user_display} at {now}; no change to model-config.json."
+            )
+            return
 
 
     async def _handle_callback_query(
