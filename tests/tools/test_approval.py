@@ -46,6 +46,47 @@ class TestSmartApproval:
         assert mock_call.call_args.kwargs["max_tokens"] == 16
 
 
+class TestWebhookReadonlyAllowlist:
+    def _config(self):
+        return {
+            "safety": {
+                "webhook_allowlist": {
+                    "terminal_readonly": True,
+                    "internal_destinations": [
+                        "telegram:-1003914984528:256",
+                        "https://mellow-mule-232.convex.site/api/tasks/comment",
+                        "https://mellow-mule-232.convex.cloud/api/*",
+                    ],
+                }
+            }
+        }
+
+    def _check(self, command):
+        with mock_patch("hermes_cli.config.load_config", return_value=self._config()):
+            token = approval_module._approval_session_key.set("webhook-test")
+            try:
+                with mock_patch.dict("os.environ", {"HERMES_CRON_SESSION": ""}, clear=False):
+                    with mock_patch("gateway.session_context.get_session_env", side_effect=lambda key, default="": "webhook" if key == "HERMES_SESSION_PLATFORM" else default):
+                        return approval_module.check_all_command_guards(command, "local")
+            finally:
+                approval_module._approval_session_key.reset(token)
+
+    def test_webhook_allows_readonly_search_without_prompt(self):
+        result = self._check('grep -r "foo" /Users/TJ/.hermes/skills/')
+        assert result["approved"] is True
+        assert result.get("webhook_allowlisted") is True
+
+    def test_webhook_allows_configured_mc_comment_post(self):
+        result = self._check('curl -s -X POST https://mellow-mule-232.convex.site/api/tasks/comment')
+        assert result["approved"] is True
+        assert result.get("webhook_allowlisted") is True
+
+    def test_webhook_still_blocks_recursive_delete(self):
+        result = self._check("rm -rf /tmp/test/")
+        assert result["approved"] is False
+        assert "approval" in result.get("status", "") or "BLOCKED" in result.get("message", "")
+
+
 class TestDetectDangerousRm:
     def test_rm_rf_detected(self):
         is_dangerous, key, desc = detect_dangerous_command("rm -rf /home/user")
@@ -1350,6 +1391,7 @@ class TestApprovalTimeoutIsNotConsent:
         }
         os.environ.pop("HERMES_YOLO_MODE", None)
         os.environ.pop("HERMES_INTERACTIVE", None)
+        os.environ.pop("HERMES_CRON_SESSION", None)
         os.environ["HERMES_GATEWAY_SESSION"] = "1"
         os.environ["HERMES_SESSION_KEY"] = self.SESSION_KEY
 

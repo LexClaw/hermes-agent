@@ -868,6 +868,135 @@ def _get_cron_approval_mode() -> str:
         return "deny"
 
 
+def _get_webhook_allowlist_config() -> dict:
+    """Return safety.webhook_allowlist from config with safe defaults."""
+    try:
+        from hermes_cli.config import load_config
+        config = load_config()
+        allowlist = cfg_get(config, "safety", "webhook_allowlist", default={}) or {}
+        if not isinstance(allowlist, dict):
+            return {}
+        return allowlist
+    except Exception:
+        return {}
+
+
+def _webhook_terminal_readonly_enabled() -> bool:
+    return is_truthy_value(_get_webhook_allowlist_config().get("terminal_readonly", False))
+
+
+def _webhook_internal_destinations() -> list[str]:
+    destinations = _get_webhook_allowlist_config().get("internal_destinations", []) or []
+    if not isinstance(destinations, list):
+        return []
+    return [str(destination).strip() for destination in destinations if str(destination).strip()]
+
+
+def _is_webhook_session() -> bool:
+    return _get_session_platform().strip().lower() == "webhook"
+
+
+def _has_shell_control_operator(command: str) -> bool:
+    """Reject compound shell syntax for the webhook terminal allowlist."""
+    return bool(re.search(r'(?:[;&|`]|\$\(|\n)', command))
+
+
+def _match_internal_url(url: str, destinations: list[str]) -> bool:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+
+    for destination in destinations:
+        if not destination.startswith(("http://", "https://")):
+            continue
+        if destination.endswith("*"):
+            if url.startswith(destination[:-1]):
+                return True
+        elif url == destination:
+            return True
+    return False
+
+
+def _extract_curl_method_and_url(tokens: list[str]) -> tuple[str, str]:
+    method = "GET"
+    url = ""
+    i = 1
+    while i < len(tokens):
+        token = tokens[i]
+        if token in {"-X", "--request"} and i + 1 < len(tokens):
+            method = tokens[i + 1].upper()
+            i += 2
+            continue
+        if token.startswith("-X") and len(token) > 2:
+            method = token[2:].upper()
+            i += 1
+            continue
+        if token in {"-d", "--data", "--data-raw", "--data-binary", "--form", "-F"}:
+            method = "POST"
+            i += 2
+            continue
+        if token.startswith(("http://", "https://")):
+            url = token
+        i += 1
+    return method, url
+
+
+def _is_webhook_readonly_terminal_command(command: str) -> bool:
+    """Allow safe webhook review commands without interactive approval."""
+    if not _is_webhook_session() or not _webhook_terminal_readonly_enabled():
+        return False
+    if _has_shell_control_operator(command):
+        return False
+
+    try:
+        import shlex
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+
+    name = os.path.basename(tokens[0])
+    readonly = {
+        "cat", "head", "tail", "file", "stat", "wc",
+        "grep", "rg", "ls", "tree", "ps", "lsof",
+        "awk", "sort", "uniq", "jq",
+    }
+    if name in readonly:
+        return True
+    if name == "less":
+        return "-F" not in tokens and "--quit-if-one-screen" not in tokens
+    if name == "find":
+        return "-delete" not in tokens and "-exec" not in tokens and "-execdir" not in tokens
+    if name == "sed":
+        return not any(t == "-i" or t.startswith("-i") or t == "--in-place" for t in tokens[1:])
+    if name == "git" and len(tokens) > 1:
+        return tokens[1] in {"log", "diff", "show", "status"}
+    if name == "sqlite3":
+        sql = " ".join(tokens[2:]).strip().lower()
+        return bool(sql) and sql.startswith("select") and not re.search(r'\b(insert|update|delete|drop|alter|create|replace|truncate)\b', sql)
+    if name == "curl":
+        method, url = _extract_curl_method_and_url(tokens)
+        if not url:
+            return False
+        destinations = _webhook_internal_destinations()
+        if method == "GET" and _match_internal_url(url, destinations + [
+            "https://mellow-mule-232.convex.cloud/",
+            "https://mellow-mule-232.convex.site/",
+            "https://api.github.com/",
+            "https://github.com/",
+        ]):
+            return True
+        return method == "POST" and _match_internal_url(url, destinations)
+    if name in {"python", "python3", "node"} and len(tokens) >= 3 and tokens[1] in {"-c", "-e"}:
+        code = tokens[2].lower()
+        blocked = {"subprocess", "os.system", "popen", "child_process", "exec(", "spawn("}
+        return not any(term in code for term in blocked)
+    return False
+
+
 def _smart_approve(command: str, description: str) -> str:
     """Use the auxiliary LLM to assess risk and decide approval.
 
@@ -1113,6 +1242,9 @@ def check_all_command_guards(command: str, env_type: str,
                         ),
                     }
         return {"approved": True, "message": None}
+
+    if _is_webhook_readonly_terminal_command(command):
+        return {"approved": True, "message": None, "webhook_allowlisted": True}
 
     # --- Phase 1: Gather findings from both checks ---
 
