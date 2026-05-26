@@ -807,7 +807,21 @@ class WebhookAdapter(BasePlatformAdapter):
                 return json.dumps(value, indent=2)[:2000]
             return str(value)
 
-        return re.sub(r"\{([a-zA-Z0-9_.]+)\}", _resolve, template)
+        rendered = re.sub(r"\{([a-zA-Z0-9_.]+)\}", _resolve, template)
+
+        # Grant re-review staleness fix (card kn7d6xch): strip prior
+        # grant-verdict marker blocks. If any were present, prepend a
+        # fresh-audit instruction so the agent does not regurgitate.
+        if route_name == "grant-auto-review":
+            stripped, count = _GRANT_VERDICT_MARKER_RE.subn("", rendered)
+            if count > 0:
+                rendered = _GRANT_FRESH_AUDIT_INSTRUCTION + stripped
+                logger.info(
+                    "[webhook] grant-auto-review: stripped %d prior "
+                    "verdict marker block(s) from prompt",
+                    count,
+                )
+        return rendered
 
     def _render_delivery_extra(
         self, extra: dict, payload: dict
