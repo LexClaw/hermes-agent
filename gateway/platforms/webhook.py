@@ -68,6 +68,25 @@ DEFAULT_PORT = 8644
 _INSECURE_NO_AUTH = "INSECURE_NO_AUTH"
 _DYNAMIC_ROUTES_FILENAME = "webhook_subscriptions.json"
 
+# Strip prior Grant verdict marker blocks from rendered prompts so re-reviews
+# do not regurgitate stale verdicts. Matches a marker comment + body up to the
+# next marker, a known post-verdict work/status boundary, a blank line pair
+# followed by a non-verdict heading, or end of string. See card kn7d6xch.
+_GRANT_VERDICT_MARKER_RE = re.compile(
+    r"<!--\s*grant-verdict:[^>]+-->.*?"
+    r"(?=\n\s*\n(?:POST-VERDICT REID SIGNAL:|REID POST-VERDICT:|"
+    r"Fresh work status:|Reid completion:|Reid follow-up:|## |# )|"
+    r"<!--\s*grant-verdict:|\Z)",
+    re.DOTALL,
+)
+_GRANT_FRESH_AUDIT_INSTRUCTION = (
+    "NOTE: Card has been re-submitted after one or more prior "
+    "CHANGES_REQUIRED verdicts. You MUST re-audit current code/test/file "
+    "state from scratch and produce a fresh independent verdict. The prior "
+    "verdicts have been stripped from notes for you. Do not produce a "
+    "verdict that mirrors prior text.\n\n"
+)
+
 # Hostnames/IP literals that only serve connections originating on the same
 # machine. Anything else is treated as a public bind for safety-rail purposes.
 _LOOPBACK_HOSTS = frozenset({
