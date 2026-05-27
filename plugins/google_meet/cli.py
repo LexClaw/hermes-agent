@@ -195,13 +195,41 @@ def _cmd_setup() -> int:
 
     auth_path = _auth_state_path()
     auth_ok = auth_path.is_file()
+    auth_scope_ok = True
+    auth_scope_msg = ""
+    if auth_ok:
+        # Validate that the SID-family auth cookies are scoped to .google.com,
+        # not just .youtube.com. If Google's sign-in flow only landed cookies
+        # on .youtube.com (common when accounts.google.com redirects through
+        # YouTube during auth), meet.google.com will see the bot as anonymous
+        # and the host-deny anti-bot path fires before any lobby prompt.
+        try:
+            import json as _json
+            _data = _json.loads(auth_path.read_text(encoding="utf-8"))
+            _required = {"SID", "HSID", "SSID", "APISID", "SAPISID"}
+            _google_names = {
+                c.get("name") for c in _data.get("cookies", [])
+                if (c.get("domain") or "").endswith(".google.com")
+            }
+            _missing = _required - _google_names
+            if _missing:
+                auth_scope_ok = False
+                auth_scope_msg = (
+                    f"auth cookies missing on .google.com: {sorted(_missing)} "
+                    f"— re-run: hermes meet auth (the bot will be denied without these)"
+                )
+        except Exception as _e:
+            auth_scope_ok = False
+            auth_scope_msg = f"could not parse auth file: {_e}"
     print(
         "  google auth    : "
         + (f"ok ({auth_path})" if auth_ok else "not saved — run: hermes meet auth")
     )
+    if auth_ok and not auth_scope_ok:
+        print(f"                   WARNING: {auth_scope_msg}")
 
     print()
-    all_ok = system_ok and pw_ok and chromium_ok
+    all_ok = system_ok and pw_ok and chromium_ok and (not auth_ok or auth_scope_ok)
     if all_ok:
         print(
             "ready. Join a meeting:  "
@@ -360,6 +388,23 @@ def _cmd_auth() -> int:
                 input("press Enter after you've signed in ... ")
             except EOFError:
                 pass
+            # IMPORTANT: visit meet.google.com (and a vanilla google.com page)
+            # before capturing storage_state. Google issues the SID family of
+            # auth cookies per top-level domain on first visit. If the user
+            # only saw accounts.google.com (or got redirected via YouTube),
+            # the saved cookies end up scoped to .youtube.com only and the
+            # bot lands on meet.google.com as an anonymous guest, triggering
+            # the host-denies-bot path before any lobby prompt. Forcing a
+            # navigation to meet.google.com here makes Google set the auth
+            # cookies on .google.com so the bot is identified on join.
+            for warmup_url in ("https://www.google.com/", "https://meet.google.com/"):
+                try:
+                    page.goto(warmup_url, wait_until="domcontentloaded", timeout=15_000)
+                    page.wait_for_timeout(1_500)
+                except Exception:
+                    # Best-effort. If a warmup nav fails we still capture
+                    # whatever cookies are present.
+                    pass
             context.storage_state(path=str(path))
             browser.close()
     except Exception as e:
