@@ -528,6 +528,16 @@ def run_bot() -> int:  # noqa: C901 — orchestration, explicit branches
     chrome_args = [
         "--use-fake-ui-for-media-stream",
         "--disable-blink-features=AutomationControlled",
+        # Extra anti-detection. Meet's anti-bot pipeline checks for these
+        # automation tells and will deny a session pre-lobby if it sniffs
+        # them. Without these, Chromium ships a webdriver flag and a clean
+        # PluginArray that fingerprints as a bot.
+        "--disable-features=IsolateOrigins,site-per-process,AutomationControlled",
+        "--no-default-browser-check",
+        "--no-first-run",
+        "--disable-infobars",
+        "--disable-dev-shm-usage",
+        "--no-sandbox",
     ]
     if not rt["enabled"]:
         # v1-style fake device (silence) — we don't care about mic content
@@ -548,15 +558,24 @@ def run_bot() -> int:  # noqa: C901 — orchestration, explicit branches
             )
             context_args = {
                 "viewport": {"width": 1280, "height": 800},
-                "user_agent": (
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                ),
+                "user_agent": _platform_user_agent(),
                 "permissions": ["microphone", "camera"],
+                "locale": "en-US",
+                "timezone_id": "America/New_York",
             }
             if auth_state and Path(auth_state).is_file():
                 context_args["storage_state"] = auth_state
             context = browser.new_context(**context_args)
+            # Layer-2 anti-detection: scrub the WebDriver flag and other
+            # automation tells via init script. Runs in every new document
+            # before any site JS sees them. Meet's anti-bot inspector reads
+            # navigator.webdriver and PluginArray to flag headless sessions;
+            # leaving them at defaults guarantees a pre-lobby denial even
+            # with valid auth cookies.
+            try:
+                context.add_init_script(_STEALTH_INIT_JS)
+            except Exception:
+                pass
             page = context.new_page()
 
             try:
@@ -811,6 +830,88 @@ def _looks_like_human_speaker(speaker: str, bot_guest_name: str) -> bool:
     if spk in {"unknown", "you", bot_guest_name.strip().lower()}:
         return False
     return True
+
+
+def _platform_user_agent() -> str:
+    """Return a user_agent string matching the host platform.
+
+    Chromium's automation user_agent (or a Linux UA on a Mac host) is a
+    fingerprint mismatch that Google Meet flags. We pick a current desktop
+    UA per platform so the storage_state, geolocation, and locale all
+    align with what a real Chrome on this OS would send.
+    """
+    import platform as _platform
+    system = _platform.system()
+    if system == "Darwin":
+        return (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_0) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+    if system == "Windows":
+        return (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        )
+    return (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+
+
+_STEALTH_INIT_JS = r"""
+// Layer-2 stealth shim. Runs in every new document before any page JS.
+// Targets the four classic headless tells Meet's anti-bot pipeline
+// uses to deny pre-lobby:
+//   1. navigator.webdriver === true
+//   2. navigator.plugins / mimeTypes empty
+//   3. window.chrome undefined
+//   4. WebGL vendor/renderer reporting "SwiftShader" or "ANGLE" generic
+(() => {
+  try {
+    // 1. Drop the webdriver flag.
+    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+  } catch (e) {}
+  try {
+    // 2. Plant a non-empty PluginArray. Modern Chrome has PDF Viewer baked in.
+    const fakePlugins = [
+      {name: 'PDF Viewer', filename: 'internal-pdf-viewer',
+       description: 'Portable Document Format'},
+      {name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer',
+       description: 'Portable Document Format'},
+      {name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer',
+       description: 'Portable Document Format'},
+      {name: 'Microsoft Edge PDF Viewer', filename: 'internal-pdf-viewer',
+       description: 'Portable Document Format'},
+      {name: 'WebKit built-in PDF', filename: 'internal-pdf-viewer',
+       description: 'Portable Document Format'},
+    ];
+    Object.defineProperty(navigator, 'plugins',
+      {get: () => fakePlugins, configurable: true});
+    Object.defineProperty(navigator, 'languages',
+      {get: () => ['en-US', 'en'], configurable: true});
+  } catch (e) {}
+  try {
+    // 3. window.chrome stub. Real Chrome ships an object with runtime/loadTimes.
+    if (!window.chrome) {
+      window.chrome = {runtime: {}, loadTimes: function() {}, csi: function() {}};
+    }
+  } catch (e) {}
+  try {
+    // 4. Permissions.query: Chromium-headless returns "denied" for notifications
+    // even when default is "prompt". Patch to match real Chrome.
+    const _origQuery = window.navigator.permissions
+      && window.navigator.permissions.query;
+    if (_origQuery) {
+      window.navigator.permissions.query = (params) =>
+        params && params.name === 'notifications'
+          ? Promise.resolve({state: Notification.permission, onchange: null})
+          : _origQuery(params);
+    }
+  } catch (e) {}
+})();
+"""
 
 
 def _click_join(page, state: _BotState) -> None:
