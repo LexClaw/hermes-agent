@@ -108,6 +108,19 @@ _REMOTE_ENV_BACKENDS = frozenset(
 _secret_capture_callback = None
 
 
+def _try_record_skill_load(skill_name: str) -> None:
+    try:
+        from tools import hit_network_ale_skill_telemetry as _ale_skill_telemetry
+
+        if not _ale_skill_telemetry.telemetry_enabled():
+            return
+        _ale_skill_telemetry.record_skill_load(skill_name)
+    except BaseException as exc:
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+            raise
+        return
+
+
 def load_env() -> Dict[str, str]:
     """Load profile-scoped environment variables from HERMES_HOME/.env."""
     env_path = get_hermes_home() / ".env"
@@ -834,6 +847,7 @@ def _serve_plugin_skill(
                 "Could not preprocess plugin skill %s:%s", namespace, bare, exc_info=True
             )
 
+    _try_record_skill_load(f"{namespace}:{bare}")
     return json.dumps(
         {
             "success": True,
@@ -910,13 +924,14 @@ def skill_view(
                         },
                         ensure_ascii=False,
                     )
-                return _serve_plugin_skill(
+                plugin_result = _serve_plugin_skill(
                     plugin_skill_md,
                     namespace,
                     bare,
                     preprocess=preprocess,
                     session_id=task_id,
                 )
+                return plugin_result
 
             # Plugin exists but this specific skill is missing?
             available = pm.list_plugin_skills(namespace)
@@ -1197,6 +1212,7 @@ def skill_view(
                 content = target_file.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 # Binary file - return info about it instead
+                _try_record_skill_load(str(resolved_name))
                 return json.dumps(
                     {
                         "success": True,
@@ -1208,6 +1224,7 @@ def skill_view(
                     ensure_ascii=False,
                 )
 
+            _try_record_skill_load(str(resolved_name))
             return json.dumps(
                 {
                     "success": True,
@@ -1433,6 +1450,7 @@ def skill_view(
         if isinstance(metadata, dict):
             result["metadata"] = metadata
 
+        _try_record_skill_load(str(skill_name))
         return json.dumps(result, ensure_ascii=False)
 
     except Exception as e:

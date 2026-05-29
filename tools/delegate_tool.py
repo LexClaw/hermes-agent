@@ -888,6 +888,7 @@ def _build_child_agent(
     # 'leaf' (default) cannot; 'orchestrator' retains the delegation
     # toolset subject to depth/kill-switch bounds applied below.
     role: str = "leaf",
+    ale_run_id: Optional[str] = None,
 ):
     """
     Build a child AIAgent on the main thread (thread-safe construction).
@@ -1146,6 +1147,7 @@ def _build_child_agent(
     child._subagent_id = subagent_id
     child._parent_subagent_id = parent_subagent_id
     child._subagent_goal = goal
+    child._ale_run_id = ale_run_id
 
     # Share a credential pool with the child when possible so subagents can
     # rotate credentials on rate limits instead of getting pinned to one key.
@@ -1330,6 +1332,19 @@ def _run_single_child(
     Returns a structured result dict.
     """
     child_start = time.monotonic()
+    _ale_token = None
+    _old_env_run_id = os.environ.get("HERMES_ALE_RUN_ID")
+    _child_ale_run_id = getattr(child, "_ale_run_id", None)
+    try:
+        from tools import hit_network_ale_skill_telemetry as _ale_skill_telemetry
+
+        _ale_token = _ale_skill_telemetry.set_current_run_id(_child_ale_run_id)
+    except Exception:
+        _ale_token = None
+    if _child_ale_run_id:
+        os.environ["HERMES_ALE_RUN_ID"] = str(_child_ale_run_id)
+    else:
+        os.environ.pop("HERMES_ALE_RUN_ID", None)
 
     # Get the progress callback from the child agent
     child_progress_cb = getattr(child, "tool_progress_callback", None)
@@ -1886,6 +1901,16 @@ def _run_single_child(
         # background processes, httpx clients) so subagent subprocesses
         # don't outlive the delegation.
         try:
+            if _ale_token is not None:
+                _ale_skill_telemetry.reset_current_run_id(_ale_token)  # type: ignore[name-defined]
+        except Exception:
+            pass
+        if _old_env_run_id is None:
+            os.environ.pop("HERMES_ALE_RUN_ID", None)
+        else:
+            os.environ["HERMES_ALE_RUN_ID"] = _old_env_run_id
+
+        try:
             if hasattr(child, "close"):
                 child.close()
         except Exception:
@@ -1925,6 +1950,7 @@ def delegate_task(
     acp_args: Optional[List[str]] = None,
     role: Optional[str] = None,
     model: Optional[Dict[str, str]] = None,
+    ale_run_id: Optional[str] = None,
     parent_agent=None,
 ) -> str:
     """
@@ -2066,6 +2092,7 @@ def delegate_task(
             # parent inherit. `_resolve_delegation_credentials` folds the
             # override into the config-based resolution.
             task_model_override = t.get("model") if "model" in t else model
+            task_ale_run_id = t.get("ale_run_id") if "ale_run_id" in t else ale_run_id
             try:
                 creds = _resolve_delegation_credentials(
                     cfg, parent_agent, override=task_model_override
@@ -2094,6 +2121,7 @@ def delegate_task(
                     else (acp_args if acp_args is not None else creds.get("args"))
                 ),
                 role=effective_role,
+                ale_run_id=task_ale_run_id,
             )
             # Override with correct parent tool names (before child construction mutated global)
             child._delegate_saved_tool_names = _parent_tool_names
@@ -2797,6 +2825,10 @@ DELEGATE_TASK_SCHEMA = {
                             },
                             "required": ["model"],
                         },
+                        "ale_run_id": {
+                            "type": "string",
+                            "description": "Internal ALE run id propagated from a HERMES-ALE-RUN prompt marker.",
+                        },
                     },
                     "required": ["goal"],
                 },
@@ -2834,6 +2866,10 @@ DELEGATE_TASK_SCHEMA = {
                     },
                 },
                 "required": ["model"],
+            },
+            "ale_run_id": {
+                "type": "string",
+                "description": "Internal ALE run id propagated from a HERMES-ALE-RUN prompt marker.",
             },
             "acp_command": {
                 "type": "string",
@@ -2880,6 +2916,7 @@ registry.register(
         acp_args=args.get("acp_args"),
         role=args.get("role"),
         model=args.get("model"),
+        ale_run_id=args.get("ale_run_id"),
         parent_agent=kw.get("parent_agent"),
     ),
     check_fn=check_delegate_requirements,
