@@ -278,6 +278,7 @@ class TestInactivityTimeout:
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         future = pool.submit(agent.run_conversation, "test")
         _inactivity_timeout = False
+        _has_active_children = False
 
         while True:
             done, _ = concurrent.futures.wait({future}, timeout=_POLL_INTERVAL)
@@ -299,6 +300,61 @@ class TestInactivityTimeout:
         # Should NOT have timed out — bare agent has no get_activity_summary
         assert not _inactivity_timeout
         assert result["final_response"] == "no activity tracker"
+
+    def test_active_delegation_children_prevent_inactivity_timeout(self):
+        """When the parent has active delegation children, the inactivity
+        check is skipped even if the parent itself appears idle.
+
+        This is the Phase 2 fix: the scheduler consults the delegate_tool
+        subagent registry and won't fire the timeout as long as at least
+        one child is registered as running.
+        """
+        # Agent that runs briefly but would go idle fast
+        agent = SlowFakeAgent(
+            run_duration=5.0,
+            idle_after=0.05,
+            activity_desc="delegate_task",
+            current_tool="delegate_task",
+            api_call_count=1,
+            max_iterations=90,
+        )
+
+        _cron_inactivity_limit = 0.2  # very short — would trigger fast
+        _POLL_INTERVAL = 0.1
+        _inactivity_timeout = False
+
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(agent.run_conversation, "test with delegation")
+        result = None
+
+        # Simulate the Phase 2 poll loop: active children prevent timeout
+        while True:
+            done, _ = concurrent.futures.wait({future}, timeout=_POLL_INTERVAL)
+            if done:
+                result = future.result()
+                break
+
+            # Phase 2 logic: skip idle check when children are active
+            _has_active_children = True  # simulate active child
+            _idle_secs = 0.0
+            if not _has_active_children and hasattr(agent, "get_activity_summary"):
+                try:
+                    _act = agent.get_activity_summary()
+                    _idle_secs = _act.get("seconds_since_activity", 0.0)
+                except Exception:
+                    pass
+
+            # Should never fire because _has_active_children is True
+            if _idle_secs >= _cron_inactivity_limit:
+                _inactivity_timeout = True
+                break
+
+        pool.shutdown(wait=False, cancel_futures=True)
+
+        # With active children, the job should complete, NOT timeout
+        assert not _inactivity_timeout
+        assert result is not None
+        assert "Completed after work" in result["final_response"]
 
 
 class TestSysPathOrdering:

@@ -519,8 +519,13 @@ _HEARTBEAT_INTERVAL = 30  # seconds between parent activity heartbeats during de
 # The idle ceiling stays tight so genuinely stuck children don't mask the gateway
 # timeout. The in-tool ceiling is much higher so legit long-running tools get
 # time to finish; child_timeout_seconds (default 600s) is still the hard cap.
-_HEARTBEAT_STALE_CYCLES_IDLE = 15  # 15 * 30s = 450s idle between turns → stale
-_HEARTBEAT_STALE_CYCLES_IN_TOOL = 40  # 40 * 30s = 1200s stuck on same tool → stale
+#
+# These are configurable via environment variables for operators who need to
+# tune heartbeat sensitivity without changing the defaults:
+#   HERMES_HEARTBEAT_STALE_CYCLES_IDLE (default: 15)
+#   HERMES_HEARTBEAT_STALE_CYCLES_IN_TOOL (default: 40)
+_HEARTBEAT_STALE_CYCLES_IDLE = int(os.environ.get("HERMES_HEARTBEAT_STALE_CYCLES_IDLE", "15"))
+_HEARTBEAT_STALE_CYCLES_IN_TOOL = int(os.environ.get("HERMES_HEARTBEAT_STALE_CYCLES_IN_TOOL", "40"))
 DEFAULT_TOOLSETS = ["terminal", "file", "web"]
 
 
@@ -1447,8 +1452,13 @@ def _run_single_child(
                 pass
             try:
                 touch(desc)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "delegate_task heartbeat: failed to touch parent activity "
+                    "for subagent %d: %s",
+                    task_index,
+                    exc,
+                )
 
     _heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
 

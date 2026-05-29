@@ -1684,8 +1684,20 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
                         result = _cron_future.result()
                         break
                     # Agent still running — check inactivity.
+                    # Phase 2 fix: if the parent has active delegation children,
+                    # skip the idle check entirely. The parent will appear idle
+                    # while waiting for children, but the children are the ones
+                    # doing real work. The child_timeout_seconds and ale-sweeper
+                    # remain as safety nets.
                     _idle_secs = 0.0
-                    if hasattr(agent, "get_activity_summary"):
+                    _has_active_children = False
+                    try:
+                        from tools.delegate_tool import list_active_subagents
+                        _active = list_active_subagents()
+                        _has_active_children = len(_active) > 0
+                    except Exception:
+                        pass  # delegate_tool not available or import failed
+                    if not _has_active_children and hasattr(agent, "get_activity_summary"):
                         try:
                             _act = agent.get_activity_summary()
                             _idle_secs = _act.get("seconds_since_activity", 0.0)
@@ -1873,6 +1885,16 @@ def tick(verbose: bool = True, adapters=None, loop=None) -> int:
         return 0
 
     try:
+        # Heartbeat: always log so downstream watchdogs can detect scheduler
+        # stalls without inferring from job firings.  The 60-second ticker
+        # calls this every ~60 s; the absence of this line for >2 minutes
+        # indicates the scheduler thread itself died or is wedged.
+        # Added 2026-05-29 (card kn78cmdt736tt0q1av2ea7gghn87n5b4).
+        logger.info(
+            "cron.scheduler: tick alive (lock=%s)",
+            lock_file.name,
+        )
+
         due_jobs = get_due_jobs()
 
         if verbose and not due_jobs:
