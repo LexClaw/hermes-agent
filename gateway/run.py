@@ -9484,6 +9484,31 @@ class GatewayRunner:
             run_generation,
         )
 
+        _ale_run_id = None
+        _ale_token = None
+        _ale_status = "success"
+        try:
+            from tools import hit_network_ale_skill_telemetry as _ale_skill_telemetry
+
+            _model = "unknown"
+            try:
+                _model, _runtime = self._resolve_session_agent_runtime(
+                    source=source,
+                    session_key=session_key,
+                    user_config=_load_gateway_config(),
+                )
+            except Exception:
+                pass
+            _summary = f"session:{session_entry.session_id} {message_text[:160]}"
+            _ale_run_id = _ale_skill_telemetry.start_gateway_run(
+                model=_model,
+                summary=_summary,
+            )
+            _ale_token = _ale_skill_telemetry.set_current_run_id(_ale_run_id)
+        except Exception:
+            _ale_run_id = None
+            _ale_token = None
+
         try:
             # Emit agent:start hook
             hook_ctx = {
@@ -9893,6 +9918,7 @@ class GatewayRunner:
             return response
             
         except Exception as e:
+            _ale_status = "error"
             # Stop typing indicator on error too
             try:
                 _err_adapter = self.adapters.get(source.platform)
@@ -9952,6 +9978,16 @@ class GatewayRunner:
                 "Try again or use /reset to start a fresh session."
             )
         finally:
+            try:
+                if _ale_run_id:
+                    _ale_skill_telemetry.end_gateway_run(_ale_run_id, status=_ale_status)  # type: ignore[name-defined]
+            except Exception:
+                pass
+            try:
+                if _ale_token is not None:
+                    _ale_skill_telemetry.reset_current_run_id(_ale_token)  # type: ignore[name-defined]
+            except Exception:
+                pass
             # Restore session context variables to their pre-handler state
             self._clear_session_env(_session_env_tokens)
 

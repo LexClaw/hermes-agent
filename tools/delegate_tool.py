@@ -2837,6 +2837,10 @@ DELEGATE_TASK_SCHEMA = {
                             "type": "string",
                             "description": "Internal ALE run id propagated from a HERMES-ALE-RUN prompt marker.",
                         },
+                        "ale_run_id": {
+                            "type": "string",
+                            "description": "Internal ALE run id propagated from a HERMES-ALE-RUN prompt marker.",
+                        },
                     },
                     "required": ["goal"],
                 },
@@ -2857,6 +2861,10 @@ DELEGATE_TASK_SCHEMA = {
                     "provider": {"type": "string"},
                     "model": {"type": "string"},
                 },
+            },
+            "ale_run_id": {
+                "type": "string",
+                "description": "Internal ALE run id propagated from a HERMES-ALE-RUN prompt marker.",
             },
             "ale_run_id": {
                 "type": "string",
