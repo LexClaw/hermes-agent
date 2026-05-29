@@ -3282,6 +3282,55 @@ class TelegramAdapter(BasePlatformAdapter):
                     pass
             return
 
+        # --- Lex meet callbacks (meet:<event_id>:<y|m|n|unmute>) ---
+        # Phase 1 Lex EA in Meetings, card kn7ds5d1kh66fx4h8ysz17cm0s86vbt8.
+        # Routes to ~/.hermes/hooks/telegram-meet-callback/handler.py which
+        # mutates ~/.hermes/state/lex-meet-watcher.jsonl and (on y/m) spawns
+        # the detached joiner subprocess. Subprocess pattern matches the
+        # routing-rec / gt: precedent above.
+        if data.startswith("meet:"):
+            try:
+                import subprocess as _sp
+                from pathlib import Path as _P
+                handler = _P.home() / ".hermes" / "hooks" / "telegram-meet-callback" / "handler.py"
+                py = "/opt/homebrew/bin/python3.11"
+                user_name = getattr(query.from_user, "first_name", "") or ""
+                env = dict(os.environ)
+                env["TG_USER"] = str(user_name)
+                proc = _sp.run(
+                    [py, str(handler), "--callback-data", data, "--user", user_name],
+                    capture_output=True, text=True, timeout=15, env=env,
+                )
+                ack = "OK"
+                try:
+                    out = json.loads((proc.stdout or "").strip().splitlines()[-1])
+                    if out.get("ack"):
+                        ack = str(out["ack"])
+                except Exception:
+                    pass
+                await query.answer(text=ack)
+                # Strip buttons + show choice. Best-effort, non-fatal.
+                try:
+                    parts = data.split(":", 2)
+                    resp = parts[2] if len(parts) == 3 else ""
+                    label_map = {"y": "Join", "m": "Mute-only", "n": "Skip", "unmute": "Unmute"}
+                    label = label_map.get(resp, resp)
+                    await query.edit_message_reply_markup(reply_markup=None)
+                    await query.edit_message_text(
+                        text=self.format_message(f"{query.message.text}\n\n→ {label} ({user_name or 'user'})"),
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                        reply_markup=None,
+                    )
+                except Exception:
+                    pass
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("[meet] callback handler failed: %s", exc)
+                try:
+                    await query.answer(text="Meet callback handler failed; check telegram-meet-callback.log")
+                except Exception:
+                    pass
+            return
+
         # --- Exec approval callbacks (ea:choice:id) ---
         if data.startswith("ea:"):
             parts = data.split(":", 2)
