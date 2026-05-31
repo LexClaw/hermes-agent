@@ -473,7 +473,7 @@ def do_install(identifier: str, category: str = "", force: bool = False,
         GitHubAuth, create_source_router, ensure_hub_dirs,
         quarantine_bundle, install_from_quarantine, HubLockFile,
     )
-    from tools.skills_guard import scan_skill, should_allow_install, format_scan_report
+    from tools.skills_guard import scan_skill_with_external_scanner, should_allow_install, format_scan_report
 
     c = console or _console
     ensure_hub_dirs()
@@ -605,7 +605,7 @@ def do_install(identifier: str, category: str = "", force: bool = False,
             or getattr(meta, "identifier", "")
             or identifier
         )
-    result = scan_skill(q_path, source=scan_source)
+    result = scan_skill_with_external_scanner(q_path, source=scan_source)
     c.print(format_scan_report(result))
 
     # Check install policy
