@@ -78,7 +78,13 @@ class TestWebhookReadonlyAllowlist:
                         with mock_patch.dict(approval_module._session_approved, {"webhook-test": set()}, clear=True):
                             with mock_patch.dict(approval_module._gateway_notify_cbs, {}, clear=True):
                                 with mock_patch.object(approval_module, "_permanent_approved", set()):
-                                    return approval_module.check_all_command_guards(command, "local")
+                                    # Neutralize process-level YOLO freeze so the allowlist path is
+                                    # actually exercised. _YOLO_MODE_FROZEN is captured from
+                                    # HERMES_YOLO_MODE at import; if the runner's env has it set, the
+                                    # guard short-circuits before the webhook branch and these
+                                    # assertions silently pass for the wrong reason.
+                                    with mock_patch.object(approval_module, "_YOLO_MODE_FROZEN", False):
+                                        return approval_module.check_all_command_guards(command, "local")
             finally:
                 approval_module._approval_session_key.reset(token)
 
@@ -1643,10 +1649,19 @@ class TestApprovalTimeoutIsNotConsent:
         os.environ["HERMES_GATEWAY_SESSION"] = "1"
         os.environ["HERMES_SESSION_KEY"] = self.SESSION_KEY
 
+        # _YOLO_MODE_FROZEN is captured from HERMES_YOLO_MODE at import time, so
+        # popping the env var above is not enough — under a YOLO-enabled runner
+        # the frozen global still short-circuits check_all_command_guards before
+        # the timeout/consent path, making these consent tests silently pass for
+        # the wrong reason. Force the frozen global off for the duration.
+        self._saved_yolo_frozen = mod._YOLO_MODE_FROZEN
+        mod._YOLO_MODE_FROZEN = False
+
     def teardown_method(self):
         from tools import approval as mod
         mod._gateway_queues.clear()
         mod._gateway_notify_cbs.clear()
+        mod._YOLO_MODE_FROZEN = self._saved_yolo_frozen
         for k, v in self._saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
