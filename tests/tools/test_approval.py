@@ -163,6 +163,30 @@ class TestWebhookReadonlyAllowlist:
         assert result["approved"] is True
         assert result.get("webhook_allowlisted") is True
 
+    def test_webhook_allows_inline_grant_verdict_with_pipe_in_json_string(self):
+        # Pipes inside the quoted JSON payload are verdict text, not shell
+        # control operators. Blocking them forced Grant toward @file payloads
+        # that can leave service-token JSON in /tmp.
+        notes = self._grant_verdict_notes(
+            verdict="PASS",
+            reason="Evidence: `pytest -q | tail -5` output was reviewed; verdict text may cite shell pipes safely.",
+        )
+        command = self._curl_mutation_with_data(
+            repr(self._grant_update_notes_payload(notes))
+        )
+        result = self._check(command)
+        assert result["approved"] is True
+        assert result.get("webhook_allowlisted") is True
+
+    def test_webhook_still_blocks_unquoted_pipe_operator(self):
+        reason = "Specific gap: build evidence is missing, so Reid must run npx next build and post the exact output."
+        command = self._curl_mutation_with_data(
+            repr(self._grant_update_notes_payload(self._grant_verdict_notes(reason=reason)))
+        ) + " | jq ."
+        result = self._check(command)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
     def test_webhook_allows_confined_grant_verdict_atfile(self, tmp_path):
         payload_path = self._write_grant_tmp_payload(
             Path("tmp"),

@@ -915,9 +915,34 @@ def _get_webhook_route_name() -> str:
     return ""
 
 
-def _has_shell_control_operator(command: str) -> bool:
-    """Reject compound shell syntax for the webhook terminal allowlist."""
-    return bool(re.search(r'(?:[;&|`]|\$\(|\n)', command))
+def _has_unquoted_shell_control_operator(command: str) -> bool:
+    """Return True only for shell operators that the shell will interpret.
+
+    The webhook curl allowlist rejects compound shell syntax so autonomous
+    reviews cannot chain writes/cleanup/interpreters.  A literal pipe inside a
+    quoted JSON payload is data, not shell control syntax; treating it as an
+    operator pushes Grant toward unsafe @file workarounds that write the service
+    token to /tmp.
+    """
+    quote = ""
+    escaped = False
+    for char in command:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char in ";&|`" or char == "\n":
+            return True
+    return False
 
 
 def _match_internal_url(url: str, destinations: list[str]) -> bool:
@@ -1099,7 +1124,7 @@ def _is_grant_review_mutation_curl(method: str, url: str, tokens: list[str]) -> 
 
 
 def _split_webhook_terminal_command(command: str) -> list[str]:
-    if _has_shell_control_operator(command):
+    if _has_unquoted_shell_control_operator(command):
         return []
     try:
         import shlex
