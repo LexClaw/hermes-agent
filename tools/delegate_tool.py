@@ -898,6 +898,7 @@ def _build_child_agent(
     # 'leaf' (default) cannot; 'orchestrator' retains the delegation
     # toolset subject to depth/kill-switch bounds applied below.
     role: str = "leaf",
+    ale_run_id: Optional[str] = None,
 ):
     """
     Build a child AIAgent on the main thread (thread-safe construction).
@@ -1156,6 +1157,7 @@ def _build_child_agent(
     child._subagent_id = subagent_id
     child._parent_subagent_id = parent_subagent_id
     child._subagent_goal = goal
+    child._ale_run_id = ale_run_id
     child._parent_turn_id = getattr(parent_agent, "_current_turn_id", "") or ""
 
     # Share a credential pool with the child when possible so subagents can
@@ -1356,6 +1358,19 @@ def _run_single_child(
     Returns a structured result dict.
     """
     child_start = time.monotonic()
+    _ale_token = None
+    _old_env_run_id = os.environ.get("HERMES_ALE_RUN_ID")
+    _child_ale_run_id = getattr(child, "_ale_run_id", None)
+    try:
+        from tools import hit_network_ale_skill_telemetry as _ale_skill_telemetry
+
+        _ale_token = _ale_skill_telemetry.set_current_run_id(_child_ale_run_id)
+    except Exception:
+        _ale_token = None
+    if _child_ale_run_id:
+        os.environ["HERMES_ALE_RUN_ID"] = str(_child_ale_run_id)
+    else:
+        os.environ.pop("HERMES_ALE_RUN_ID", None)
 
     # Get the progress callback from the child agent
     child_progress_cb = getattr(child, "tool_progress_callback", None)
@@ -1912,6 +1927,16 @@ def _run_single_child(
         # background processes, httpx clients) so subagent subprocesses
         # don't outlive the delegation.
         try:
+            if _ale_token is not None:
+                _ale_skill_telemetry.reset_current_run_id(_ale_token)  # type: ignore[name-defined]
+        except Exception:
+            pass
+        if _old_env_run_id is None:
+            os.environ.pop("HERMES_ALE_RUN_ID", None)
+        else:
+            os.environ["HERMES_ALE_RUN_ID"] = _old_env_run_id
+
+        try:
             if hasattr(child, "close"):
                 child.close()
         except Exception:
@@ -1950,6 +1975,8 @@ def delegate_task(
     acp_command: Optional[str] = None,
     acp_args: Optional[List[str]] = None,
     role: Optional[str] = None,
+    model: Optional[Dict[str, str]] = None,
+    ale_run_id: Optional[str] = None,
     parent_agent=None,
 ) -> str:
     """
@@ -2013,16 +2040,8 @@ def delegate_task(
         )
     effective_max_iter = default_max_iter
 
-    # Resolve delegation credentials (provider:model pair).
-    # When delegation.provider is configured, this resolves the full credential
-    # bundle (base_url, api_key, api_mode) via the same runtime provider system
-    # used by CLI/gateway startup.  When unconfigured, returns None values so
-    # children inherit from the parent.
-    try:
-        creds = _resolve_delegation_credentials(cfg, parent_agent)
-    except ValueError as exc:
-        return tool_error(str(exc))
-
+    # Resolve delegation credentials below. Per-task model overrides are folded
+    # through the same runtime provider path as configured delegation defaults.
     # Normalize to task list
     max_children = _get_max_concurrent_children()
     recovered_tasks, tasks_error = _recover_tasks_from_json_string(tasks)
@@ -2043,7 +2062,14 @@ def delegate_task(
         task_list = tasks
     elif goal and isinstance(goal, str) and goal.strip():
         task_list = [
-            {"goal": goal, "context": context, "toolsets": toolsets, "role": top_role}
+            {
+                "goal": goal,
+                "context": context,
+                "toolsets": toolsets,
+                "role": top_role,
+                "model": model,
+                "ale_run_id": ale_run_id,
+            }
         ]
     else:
         return tool_error("Provide either 'goal' (single task) or 'tasks' (batch).")
@@ -2084,6 +2110,14 @@ def delegate_task(
             # Per-task role beats top-level; normalise again so unknown
             # per-task values warn and degrade to leaf uniformly.
             effective_role = _normalize_role(t.get("role") or top_role)
+            task_model_override = t.get("model") if "model" in t else model
+            task_ale_run_id = t.get("ale_run_id") if "ale_run_id" in t else ale_run_id
+            try:
+                creds = _resolve_delegation_credentials(
+                    cfg, parent_agent, override=task_model_override
+                )
+            except ValueError as exc:
+                return tool_error(str(exc))
             child = _build_child_agent(
                 task_index=i,
                 goal=t["goal"],
@@ -2106,6 +2140,7 @@ def delegate_task(
                     else (acp_args if acp_args is not None else creds.get("args"))
                 ),
                 role=effective_role,
+                ale_run_id=task_ale_run_id,
             )
             # Override with correct parent tool names (before child construction mutated global)
             child._delegate_saved_tool_names = _parent_tool_names
@@ -2376,7 +2411,9 @@ def _resolve_child_credential_pool(effective_provider: Optional[str], parent_age
     return None
 
 
-def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
+def _resolve_delegation_credentials(
+    cfg: dict, parent_agent, override: Optional[dict] = None
+) -> dict:
     """Resolve credentials for subagent delegation.
 
     If ``delegation.base_url`` is configured, subagents use that direct
@@ -2395,10 +2432,24 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
     If neither base_url nor provider is configured, returns None values so the
     child inherits everything from the parent agent.
 
+    ``override`` is an optional per-call/per-task ``model`` override of the
+    form ``{"provider": ..., "model": ...}``. When present, its ``provider``
+    and ``model`` take precedence over ``delegation.provider`` /
+    ``delegation.model``; either key may be omitted to fall back to config.
+
     Raises ValueError with a user-friendly message on credential failure.
     """
-    configured_model = str(cfg.get("model") or "").strip() or None
-    configured_provider = str(cfg.get("provider") or "").strip() or None
+    if override is not None:
+        configured_provider = (
+            str(override.get("provider") or cfg.get("provider") or "").strip()
+            or None
+        )
+        configured_model = (
+            str(override.get("model") or cfg.get("model") or "").strip() or None
+        )
+    else:
+        configured_model = str(cfg.get("model") or "").strip() or None
+        configured_provider = str(cfg.get("provider") or "").strip() or None
     configured_base_url = str(cfg.get("base_url") or "").strip() or None
     configured_api_key = str(cfg.get("api_key") or "").strip() or None
     configured_api_mode = str(cfg.get("api_mode") or "").strip().lower() or None
@@ -2770,6 +2821,18 @@ DELEGATE_TASK_SCHEMA = {
                             "enum": ["leaf", "orchestrator"],
                             "description": "Per-task role override. See top-level 'role' for semantics.",
                         },
+                        "model": {
+                            "type": "object",
+                            "description": "Per-task provider/model override, e.g. {'provider': 'openrouter', 'model': 'anthropic/claude-sonnet-4'}.",
+                            "properties": {
+                                "provider": {"type": "string"},
+                                "model": {"type": "string"},
+                            },
+                        },
+                        "ale_run_id": {
+                            "type": "string",
+                            "description": "Internal ALE run id propagated from a HERMES-ALE-RUN prompt marker.",
+                        },
                     },
                     "required": ["goal"],
                 },
@@ -2782,6 +2845,18 @@ DELEGATE_TASK_SCHEMA = {
                 "type": "string",
                 "enum": ["leaf", "orchestrator"],
                 "description": "(rebuilt at get_definitions() time)",
+            },
+            "model": {
+                "type": "object",
+                "description": "Provider/model override for all child agents, unless a task has its own model override.",
+                "properties": {
+                    "provider": {"type": "string"},
+                    "model": {"type": "string"},
+                },
+            },
+            "ale_run_id": {
+                "type": "string",
+                "description": "Internal ALE run id propagated from a HERMES-ALE-RUN prompt marker.",
             },
             "acp_command": {
                 "type": "string",
@@ -2827,6 +2902,8 @@ registry.register(
         acp_command=args.get("acp_command"),
         acp_args=args.get("acp_args"),
         role=args.get("role"),
+        model=args.get("model"),
+        ale_run_id=args.get("ale_run_id"),
         parent_agent=kw.get("parent_agent"),
     ),
     check_fn=check_delegate_requirements,
