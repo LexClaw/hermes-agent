@@ -3229,6 +3229,256 @@ class TelegramAdapter(BasePlatformAdapter):
             # Catch-all (e.g. page counter button "mx:noop")
             await query.answer()
 
+    # SIE routing-intel recommendation callbacks (routing-rec:{rec_id}:{action}).
+    async def _handle_routing_rec_callback(self, query: Any, data: str) -> None:
+        """Resolve a TJ tap on a routing-intel recommendation.
+
+        Phase 3 v1.3 actions are append-only events in approvals.jsonl:
+        veto, override, promote, decline. The older approve, skip, defer
+        surface is intentionally superseded by the v1.3 state machine.
+        """
+        import json as _json
+        import os
+        import secrets
+        import subprocess
+        import sys as _sys
+        from datetime import datetime, timezone, timedelta
+        from pathlib import Path
+
+        parts = data.split(":", 2)
+        if len(parts) != 3 or parts[0] != "routing-rec":
+            await query.answer(text="Malformed callback")
+            return
+        rec_id = parts[1]
+        action = parts[2]
+        if action not in ("veto", "override", "promote", "decline"):
+            await query.answer(text=f"Unknown action: {action}")
+            return
+
+        caller_id = str(getattr(query.from_user, "id", ""))
+        try:
+            query_message = getattr(query, "message", None)
+            query_chat_id = getattr(query_message, "chat_id", None)
+            query_chat = getattr(query_message, "chat", None)
+            query_chat_type = getattr(query_chat, "type", None)
+            query_thread_id = getattr(query_message, "message_thread_id", None)
+            query_user_name = getattr(query.from_user, "first_name", None)
+            if not self._is_callback_user_authorized(
+                caller_id,
+                chat_id=query_chat_id,
+                chat_type=str(query_chat_type) if query_chat_type is not None else None,
+                thread_id=str(query_thread_id) if query_thread_id is not None else None,
+                user_name=query_user_name,
+            ):
+                await query.answer(text="⛔ Not authorized.")
+                return
+        except Exception:
+            pass
+
+        workspace = Path(os.path.expanduser("~/hermes-workspace/Lex-Workspace"))
+        approvals = workspace / "sie/routing-intel/approvals.jsonl"
+        cooldowns = workspace / "sie/routing-intel/cooldowns.jsonl"
+        approvals.parent.mkdir(parents=True, exist_ok=True)
+        scripts_dir = str(workspace / "scripts")
+        if scripts_dir not in _sys.path:
+            _sys.path.insert(0, scripts_dir)
+        try:
+            from ale_atomic import atomic_append_jsonl as _append  # type: ignore
+        except Exception as imp_exc:
+            logger.error("[routing-rec] cannot import ale_atomic from %s: %s", scripts_dir, imp_exc)
+            await query.answer(text="⚠️ Append primitive unavailable; check gateway.log")
+            return
+
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat().replace("+00:00", "Z")
+        user_display = getattr(query.from_user, "first_name", "User")
+
+        def _latest_row_for(rid: str) -> Optional[Dict[str, Any]]:
+            if not approvals.exists():
+                return None
+            latest: Optional[Dict[str, Any]] = None
+            for line in approvals.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = _json.loads(line)
+                except Exception:
+                    continue
+                if row.get("recommendation_id") == rid:
+                    latest = row
+            return latest
+
+        def _parse_ts(value: Any) -> Optional[datetime]:
+            if not isinstance(value, str):
+                return None
+            try:
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+
+        latest = _latest_row_for(rec_id)
+        latest_event = (latest or {}).get("event") if latest else None
+        original_text = getattr(getattr(query, "message", None), "text", "") or ""
+
+        async def _edit_with_suffix(suffix: str) -> None:
+            try:
+                new_text = (original_text + suffix)[:4000] if original_text else suffix
+                await query.edit_message_text(text=new_text, parse_mode=None, reply_markup=None)
+            except Exception as edit_exc:
+                logger.warning("[routing-rec] edit_message_text failed (non-fatal): %s", edit_exc)
+
+        if action == "veto":
+            if latest_event == "vetoed":
+                await query.answer(text="Already vetoed")
+                return
+            if latest_event != "approved":
+                await query.answer(text=f"Cannot veto: state={latest_event or 'none'}")
+                return
+            window_end = _parse_ts((latest or {}).get("veto_window_ends_at"))
+            if window_end is not None and now_dt > window_end:
+                _append(str(approvals), {
+                    "recommendation_id": rec_id,
+                    "event": "vetoed_too_late",
+                    "attempted_at": now,
+                    "attempted_by": user_display,
+                    "attempted_by_id": caller_id,
+                    "veto_window_ends_at": (latest or {}).get("veto_window_ends_at"),
+                })
+                await query.answer(text="Veto window closed")
+                await _edit_with_suffix(
+                    f"\n\nVeto window closed at {(latest or {}).get('veto_window_ends_at', '?')}."
+                )
+                return
+            _append(str(approvals), {
+                "recommendation_id": rec_id,
+                "event": "vetoed",
+                "vetoed_at": now,
+                "vetoed_by": user_display,
+                "vetoed_by_id": caller_id,
+            })
+            await query.answer(text="🛑 Vetoed")
+            await _edit_with_suffix(f"\n\nVETOED by {user_display} at {now}.")
+            return
+
+        if action == "override":
+            if latest_event == "approved" and (latest or {}).get("approved_by") == "tj_override":
+                await query.answer(text="Already overridden")
+                return
+            if latest_event != "skipped":
+                await query.answer(text=f"Cannot override: state={latest_event or 'none'}")
+                return
+            veto_window_ends_at = (now_dt + timedelta(hours=12)).isoformat().replace("+00:00", "Z")
+            _append(str(approvals), {
+                "recommendation_id": rec_id,
+                "event": "approved",
+                "approved_at": now,
+                "approved_by": "tj_override",
+                "approved_by_id": caller_id,
+                "veto_window_ends_at": veto_window_ends_at,
+                "rank": (latest or {}).get("rank"),
+                "title": (latest or {}).get("title"),
+                "estimated_cost_delta_usd": (latest or {}).get("estimated_cost_delta_usd"),
+                "proposed_n_per_arm": (latest or {}).get("proposed_n_per_arm"),
+                "experiment_design": (latest or {}).get("experiment_design") or {},
+            })
+            await query.answer(text="✳️ Overridden")
+            await _edit_with_suffix(f"\n\nOVERRIDDEN by {user_display}; experiment starting.")
+            return
+
+        if action == "promote":
+            if latest_event == "promoted":
+                await query.answer(text="Already promoted")
+                return
+            if latest_event != "verdict_emitted":
+                await query.answer(text=f"Cannot promote: state={latest_event or 'none'}")
+                return
+            if (latest or {}).get("verdict_outcome") != "KEEP":
+                await query.answer(text="Promote requires verdict_outcome=KEEP")
+                return
+            token_body = "".join(secrets.choice("0123456789ABCDEFGHJKMNPQRSTVWXYZ") for _ in range(12))
+            token_path = f"/tmp/sie-promote-token-{rec_id}-{token_body}"
+            try:
+                fd = os.open(token_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                try:
+                    os.write(fd, f"{rec_id}:{int(now_dt.timestamp())}".encode())
+                finally:
+                    os.close(fd)
+            except FileExistsError:
+                await query.answer(text="Token collision; retry")
+                return
+            except OSError as mint_exc:
+                logger.error("[routing-rec] token mint failed: %s", mint_exc)
+                await query.answer(text="Token mint failed; check gateway.log")
+                return
+            promote_script = workspace / "scripts/sie/hit-routing-intel-promote"
+            try:
+                result = subprocess.run(
+                    [
+                        _sys.executable,
+                        str(promote_script),
+                        "--recommendation-id",
+                        rec_id,
+                        "--token-file",
+                        token_path,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                if result.returncode == 0:
+                    await query.answer(text="🚀 Promoted")
+                    await _edit_with_suffix(f"\n\nPROMOTED by {user_display} at {now}.")
+                else:
+                    stderr_first = (result.stderr or "").splitlines()[0] if result.stderr else "(no stderr)"
+                    logger.error("[routing-rec] promote failed rc=%s: %s", result.returncode, result.stderr)
+                    await query.answer(text=f"Promote failed: {stderr_first[:50]}")
+                    await _edit_with_suffix(f"\n\nPROMOTE failed: {stderr_first[:200]}")
+            except FileNotFoundError:
+                logger.error("[routing-rec] promote script missing: %s", promote_script)
+                await query.answer(text="Promote script missing")
+                await _edit_with_suffix(f"\n\nPROMOTE failed: script {promote_script} not found.")
+            except subprocess.TimeoutExpired:
+                logger.error("[routing-rec] promote subprocess timed out for %s", rec_id)
+                await query.answer(text="Promote timeout")
+                await _edit_with_suffix("\n\nPROMOTE failed: subprocess timeout.")
+            except Exception as promote_exc:
+                logger.exception("[routing-rec] promote subprocess errored: %s", promote_exc)
+                await query.answer(text="Promote errored; check gateway.log")
+            return
+
+        if action == "decline":
+            if latest_event == "declined":
+                await query.answer(text="Already declined")
+                return
+            if latest_event != "verdict_emitted":
+                await query.answer(text=f"Cannot decline: state={latest_event or 'none'}")
+                return
+            design = (latest or {}).get("experiment_design") or {}
+            _append(str(approvals), {
+                "recommendation_id": rec_id,
+                "event": "declined",
+                "declined_at": now,
+                "declined_by": user_display,
+                "declined_by_id": caller_id,
+            })
+            _append(str(cooldowns), {
+                "recommendation_id": rec_id,
+                "agent": design.get("agent", ""),
+                "task_type": design.get("task_type", ""),
+                "candidate_model": design.get("candidate_model", ""),
+                "outcome": "declined",
+                "recorded_at": now,
+            })
+            await query.answer(text="🙅 Declined")
+            await _edit_with_suffix(
+                f"\n\nDECLINED by {user_display} at {now}; no change to model-config.json."
+            )
+            return
+
     async def _handle_callback_query(
         self, update: "Update", context: "ContextTypes.DEFAULT_TYPE"
     ) -> None:
@@ -3249,6 +3499,62 @@ class TelegramAdapter(BasePlatformAdapter):
             chat_id = str(query.message.chat_id) if query.message else None
             if chat_id:
                 await self._handle_model_picker_callback(query, data, chat_id)
+            return
+
+        # --- SIE routing-intel recommendation callbacks ---
+        if data.startswith("routing-rec:"):
+            try:
+                await self._handle_routing_rec_callback(query, data)
+            except Exception as exc:
+                logger.exception("[routing-rec] handler failed: %s", exc)
+                try:
+                    await query.answer(text="Failed to record choice; check gateway.log")
+                except Exception:
+                    pass
+            return
+
+        # --- Lex meet callbacks (meet:<event_id>:<y|m|n|unmute>) ---
+        if data.startswith("meet:"):
+            try:
+                import subprocess as _sp
+                from pathlib import Path as _P
+
+                handler = _P.home() / ".hermes" / "hooks" / "telegram-meet-callback" / "handler.py"
+                py = "/opt/homebrew/bin/python3.11"
+                user_name = getattr(query.from_user, "first_name", "") or ""
+                env = dict(os.environ)
+                env["TG_USER"] = str(user_name)
+                proc = _sp.run(
+                    [py, str(handler), "--callback-data", data, "--user", user_name],
+                    capture_output=True, text=True, timeout=15, env=env,
+                )
+                ack = "OK"
+                try:
+                    out = json.loads((proc.stdout or "").strip().splitlines()[-1])
+                    if out.get("ack"):
+                        ack = str(out["ack"])
+                except Exception:
+                    pass
+                await query.answer(text=ack)
+                try:
+                    parts = data.split(":", 2)
+                    resp = parts[2] if len(parts) == 3 else ""
+                    label_map = {"y": "Join", "m": "Mute-only", "n": "Skip", "unmute": "Unmute"}
+                    label = label_map.get(resp, resp)
+                    await query.edit_message_reply_markup(reply_markup=None)
+                    await query.edit_message_text(
+                        text=self.format_message(f"{query.message.text}\n\n→ {label} ({user_name or 'user'})"),
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                        reply_markup=None,
+                    )
+                except Exception:
+                    pass
+            except Exception as exc:
+                logger.exception("[meet] callback handler failed: %s", exc)
+                try:
+                    await query.answer(text="Meet callback handler failed; check telegram-meet-callback.log")
+                except Exception:
+                    pass
             return
 
         # --- Gmail-triage callbacks (gt:verb:arg) ---
