@@ -40,6 +40,15 @@ from tools import file_state
 from tools.terminal_tool import set_approval_callback as _set_subagent_approval_cb
 from utils import base_url_hostname, is_truthy_value
 
+_RESOLVER_PATH = os.path.expanduser("~/.hermes/skills/RESOLVER.md")
+_RESOLVER_ROUTING_PROMPT = (
+    "## ROUTING (read before acting)\n"
+    f"Before starting, read {_RESOLVER_PATH} and follow it to route to the right skill(s). "
+    "Brain-first is always-on: before answering about any person, company, deal, "
+    "meeting, concept, or idea, query GBrain first (gbrain query / gbrain get) "
+    "and use external search only as fallback."
+)
+
 
 # Tools that children must never have access to
 DELEGATE_BLOCKED_TOOLS = frozenset(
@@ -596,6 +605,7 @@ def _build_child_system_prompt(
             f"{workspace_path}\n"
             "Use this exact path for local repository/workdir operations unless the task explicitly says otherwise."
         )
+    parts.append(f"\n{_RESOLVER_ROUTING_PROMPT}")
     parts.append(
         "\nComplete this task using the tools available to you. "
         "When finished, provide a clear, concise summary of:\n"

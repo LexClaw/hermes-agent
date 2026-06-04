@@ -141,6 +141,32 @@ class TestChildSystemPrompt(unittest.TestCase):
         prompt = _build_child_system_prompt("Do something", "  ")
         self.assertNotIn("CONTEXT", prompt)
 
+    def test_resolver_routing_injected_for_leaf_and_orchestrator(self):
+        resolver_path = os.path.expanduser("~/.hermes/skills/RESOLVER.md")
+        for role in ("leaf", "orchestrator"):
+            with self.subTest(role=role):
+                prompt = _build_child_system_prompt("x", role=role)
+                self.assertIn(resolver_path, prompt)
+                self.assertIn("Brain-first is always-on", prompt)
+
+    def test_resolver_routing_is_unconditional_without_context_or_workspace(self):
+        resolver_path = os.path.expanduser("~/.hermes/skills/RESOLVER.md")
+        prompt = _build_child_system_prompt("x")
+        self.assertNotIn("CONTEXT", prompt)
+        self.assertNotIn("WORKSPACE PATH", prompt)
+        self.assertIn(resolver_path, prompt)
+        self.assertIn("gbrain query / gbrain get", prompt.lower())
+
+    def test_z_workers_include_brain_first_preface(self):
+        for path in (
+            "/Users/TJ/.hermes/scripts/meeting-brief-worker.py",
+            "/Users/TJ/.hermes/scripts/overnight-executor.sh",
+        ):
+            with self.subTest(path=path):
+                content = open(path, encoding="utf-8").read()
+                self.assertIn("Brain-first is always-on", content)
+                self.assertIn("/Users/TJ/.hermes/skills/RESOLVER.md", content)
+
 
 class TestStripBlockedTools(unittest.TestCase):
     def test_removes_blocked_toolsets(self):
