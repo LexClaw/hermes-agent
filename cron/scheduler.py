@@ -1803,9 +1803,18 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
                     if done:
                         result = _cron_future.result()
                         break
-                    # Agent still running — check inactivity.
+                    # Agent still running, check inactivity. If delegate_task
+                    # children are active, the parent can look idle while the
+                    # children do real work, so skip the parent idle kill.
                     _idle_secs = 0.0
-                    if hasattr(agent, "get_activity_summary"):
+                    _has_active_children = False
+                    try:
+                        from tools.delegate_tool import list_active_subagents
+
+                        _has_active_children = bool(list_active_subagents())
+                    except Exception:
+                        pass
+                    if not _has_active_children and hasattr(agent, "get_activity_summary"):
                         try:
                             _act = agent.get_activity_summary()
                             _idle_secs = _act.get("seconds_since_activity", 0.0)
@@ -1993,6 +2002,7 @@ def tick(verbose: bool = True, adapters=None, loop=None, sync: bool = True) -> i
         return 0
 
     try:
+        logger.info("cron.scheduler: tick alive (lock=%s)", lock_file.name)
         due_jobs = get_due_jobs()
 
         if verbose and not due_jobs:
@@ -2007,8 +2017,30 @@ def tick(verbose: bool = True, adapters=None, loop=None, sync: bool = True) -> i
         # For parallel jobs that are already running, advance_next_run keeps
         # bumping next_run_at forward so the grace window never expires.
         # mark_job_run() overwrites next_run_at on completion.
+        advanced_due = []
         for job in due_jobs:
-            advance_next_run(job["id"])
+            try:
+                advance_next_run(job["id"])
+                advanced_due.append(job)
+            except Exception as exc:
+                logger.error(
+                    "Cron tick: advance_next_run failed for job '%s' (%s): %s; "
+                    "marking state=error, skipping execution this tick",
+                    job.get("name", job.get("id", "?")),
+                    job.get("id", "?"),
+                    exc,
+                    exc_info=True,
+                )
+                try:
+                    mark_job_run(job["id"], False, f"advance_next_run exception: {exc}")
+                except Exception as me:
+                    logger.error(
+                        "Cron tick: also failed to mark_job_run for '%s': %s",
+                        job.get("id", "?"),
+                        me,
+                    )
+                continue
+        due_jobs = advanced_due
 
         # Resolve max parallel workers: env var > config.yaml > unbounded.
         # Set HERMES_CRON_MAX_PARALLEL=1 to restore old serial behaviour.
