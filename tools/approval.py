@@ -9,6 +9,8 @@ This module is the single source of truth for the dangerous command system:
 """
 
 import contextvars
+import ast
+import json
 import logging
 import os
 import re
@@ -935,6 +937,379 @@ def _get_cron_approval_mode() -> str:
     except Exception:
         return "deny"
 
+def _get_webhook_allowlist_config() -> dict:
+    """Return safety.webhook_allowlist from config with safe defaults."""
+    try:
+        from hermes_cli.config import load_config
+        config = load_config()
+        allowlist = cfg_get(config, "safety", "webhook_allowlist", default={}) or {}
+        if not isinstance(allowlist, dict):
+            return {}
+        return allowlist
+    except Exception:
+        return {}
+
+
+def _webhook_terminal_readonly_enabled() -> bool:
+    return is_truthy_value(_get_webhook_allowlist_config().get("terminal_readonly", False))
+
+
+def _webhook_internal_destinations() -> list[str]:
+    destinations = _get_webhook_allowlist_config().get("internal_destinations", []) or []
+    if not isinstance(destinations, list):
+        return []
+    return [str(destination).strip() for destination in destinations if str(destination).strip()]
+
+
+def _is_webhook_session() -> bool:
+    return _get_session_platform().strip().lower() == "webhook"
+
+
+def _get_webhook_route_name() -> str:
+    try:
+        from gateway.session_context import get_session_env
+
+        route_name = get_session_env("HERMES_SESSION_USER_NAME", "").strip()
+        if route_name:
+            return route_name
+        chat_id = get_session_env("HERMES_SESSION_CHAT_ID", "").strip()
+    except Exception:
+        chat_id = os.getenv("HERMES_SESSION_CHAT_ID", "").strip()
+
+    if chat_id.startswith("webhook:"):
+        parts = chat_id.split(":", 2)
+        if len(parts) >= 2:
+            return parts[1]
+    return ""
+
+
+def _has_unquoted_shell_control_operator(command: str) -> bool:
+    """Return True only for shell operators that the shell will interpret.
+
+    The webhook curl allowlist rejects compound shell syntax so autonomous
+    reviews cannot chain writes/cleanup/interpreters.  A literal pipe inside a
+    quoted JSON payload is data, not shell control syntax; treating it as an
+    operator pushes Grant toward unsafe @file workarounds that write the service
+    token to /tmp.
+
+    Keep command-substitution coverage quote-aware too: unquoted ``$(...)`` and
+    backticks are shell execution primitives, but the same bytes inside a quoted
+    JSON string are verdict text and must remain allowed.
+    """
+    quote = ""
+    escaped = False
+    for index, char in enumerate(command):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True
+            continue
+        if quote:
+            if char == quote:
+                quote = ""
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            continue
+        if char in ";&|`" or char == "\n":
+            return True
+        if char == "$" and index + 1 < len(command) and command[index + 1] == "(":
+            return True
+    return False
+
+
+def _match_internal_url(url: str, destinations: list[str]) -> bool:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+
+    for destination in destinations:
+        if not destination.startswith(("http://", "https://")):
+            continue
+        if destination.endswith("*"):
+            if url.startswith(destination[:-1]):
+                return True
+        elif url == destination:
+            return True
+    return False
+
+
+def _extract_curl_method_and_url(tokens: list[str]) -> tuple[str, str]:
+    method = "GET"
+    url = ""
+    i = 1
+    while i < len(tokens):
+        token = tokens[i]
+        if token in {"-X", "--request"} and i + 1 < len(tokens):
+            method = tokens[i + 1].upper()
+            i += 2
+            continue
+        if token.startswith("-X") and len(token) > 2:
+            method = token[2:].upper()
+            i += 1
+            continue
+        if token in {"-d", "--data", "--data-raw", "--data-binary", "--form", "-F"}:
+            method = "POST"
+            i += 2
+            continue
+        if token.startswith(("http://", "https://")):
+            url = token
+        i += 1
+    return method, url
+
+
+_GRANT_VERDICT_ATFILE_RE = re.compile(r"^grant_verdict_[A-Za-z0-9_.-]+\.(?:json|md)$")
+
+
+def _resolve_confined_curl_atfile_payload(value: str) -> str:
+    if not value.startswith("@"):
+        return value
+    path = value[1:]
+    try:
+        if not path or path == "-" or "\x00" in path or ".." in path.split(os.sep):
+            return ""
+        normalized_path = os.path.normpath(path)
+        filename = os.path.basename(normalized_path)
+        if os.path.dirname(normalized_path) != "/tmp" or not _GRANT_VERDICT_ATFILE_RE.fullmatch(filename):
+            return ""
+        if os.path.islink(normalized_path):
+            return ""
+        real_path = os.path.realpath(normalized_path)
+        if os.path.dirname(real_path) != os.path.realpath("/tmp") or os.path.basename(real_path) != filename:
+            return ""
+        with open(real_path, encoding="utf-8") as payload_file:
+            return payload_file.read()
+    except (OSError, ValueError):
+        return ""
+
+
+def _extract_curl_payload(tokens: list[str]) -> str:
+    payloads = []
+    i = 1
+    while i < len(tokens):
+        token = tokens[i]
+        if token in {"-d", "--data", "--data-raw", "--data-binary", "--form", "-F"} and i + 1 < len(tokens):
+            payloads.append(_resolve_confined_curl_atfile_payload(tokens[i + 1]))
+            i += 2
+            continue
+        for prefix in ("--data=", "--data-raw=", "--data-binary=", "--form=", "-d"):
+            if token.startswith(prefix) and len(token) > len(prefix):
+                payloads.append(_resolve_confined_curl_atfile_payload(token[len(prefix):]))
+                break
+        i += 1
+    return "&".join(payloads)
+
+
+_GRANT_REVIEW_MUTATION_PATHS = {"tasks:updateNotes", "tasks:markChangesRequired", "tasks:updateStatus"}
+_GRANT_VERDICT_BLOCK_RE = re.compile(
+    r"<!--\s*grant-verdict:.+?:(PASS|CHANGES_REQUIRED|FAIL|VERIFICATION_BLOCKED|TIMEOUT)"
+    r"(?::attempt=[A-Za-z0-9_-]+)?\s*-->\s*(.*?)(?=\n\s*<!--\s*grant-verdict:|\Z)",
+    re.DOTALL,
+)
+_GRANT_VERDICTS_REQUIRING_REASON = {"CHANGES_REQUIRED", "FAIL", "VERIFICATION_BLOCKED"}
+_MIN_GRANT_VERDICT_REASON_CHARS = 40
+
+
+def _extract_convex_mutation_path(payload: str) -> str:
+    try:
+        decoded = json.loads(payload)
+    except json.JSONDecodeError:
+        match = re.search(r'"path"\s*:\s*"([^"]+)"', payload)
+        return match.group(1) if match else ""
+    return decoded.get("path", "") if isinstance(decoded, dict) else ""
+
+
+def _is_grant_verdict_update_notes_payload(payload: str) -> bool:
+    try:
+        decoded = json.loads(payload)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(decoded, dict) or decoded.get("path") != "tasks:updateNotes":
+        return False
+    args = decoded.get("args")
+    if not isinstance(args, dict):
+        return False
+    task_id = str(args.get("id", ""))
+    notes = args.get("notes")
+    if not task_id.startswith("kn") or not isinstance(notes, str):
+        return False
+    # Only Grant verdict notes with actionable rationale may pass from autonomous webhook context.
+    return _latest_grant_verdict_has_required_reason(notes)
+
+
+def _latest_grant_verdict_has_required_reason(notes: str) -> bool:
+    matches = list(_GRANT_VERDICT_BLOCK_RE.finditer(notes))
+    if not matches:
+        return False
+    latest = matches[-1]
+    verdict = latest.group(1)
+    reason = re.sub(r"<!--.*?-->", "", latest.group(2), flags=re.DOTALL).strip()
+    reason_len = len(re.sub(r"\s+", "", reason))
+    if verdict in _GRANT_VERDICTS_REQUIRING_REASON:
+        return reason_len >= _MIN_GRANT_VERDICT_REASON_CHARS
+    return True
+
+
+def _is_grant_mark_changes_required_payload(payload: str) -> bool:
+    try:
+        decoded = json.loads(payload)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(decoded, dict) or decoded.get("path") != "tasks:markChangesRequired":
+        return False
+    args = decoded.get("args")
+    return isinstance(args, dict) and str(args.get("id", "")).startswith("kn")
+
+
+def _is_grant_update_status_done_payload(payload: str) -> bool:
+    try:
+        decoded = json.loads(payload)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(decoded, dict) or decoded.get("path") != "tasks:updateStatus":
+        return False
+    args = decoded.get("args")
+    return (
+        isinstance(args, dict)
+        and str(args.get("id", "")).startswith("kn")
+        and args.get("status") == "done"
+    )
+
+
+def _is_grant_review_mutation_curl(method: str, url: str, tokens: list[str]) -> bool:
+    if _get_webhook_route_name() != "grant-auto-review":
+        return False
+    if method != "POST" or url != "https://mellow-mule-232.convex.cloud/api/mutation":
+        return False
+    payload = _extract_curl_payload(tokens)
+    path = _extract_convex_mutation_path(payload)
+    if path not in _GRANT_REVIEW_MUTATION_PATHS:
+        return False
+    if path == "tasks:updateNotes":
+        return _is_grant_verdict_update_notes_payload(payload)
+    if path == "tasks:markChangesRequired":
+        return _is_grant_mark_changes_required_payload(payload)
+    if path == "tasks:updateStatus":
+        return _is_grant_update_status_done_payload(payload)
+    return False
+
+
+def _split_webhook_terminal_command(command: str) -> list[str]:
+    if _has_unquoted_shell_control_operator(command):
+        return []
+    try:
+        import shlex
+        return shlex.split(command)
+    except ValueError:
+        return []
+
+
+def _is_webhook_readonly_terminal_command(command: str) -> bool:
+    """Allow safe webhook review commands without interactive approval."""
+    if not _is_webhook_session() or not _webhook_terminal_readonly_enabled():
+        return False
+
+    tokens = _split_webhook_terminal_command(command)
+    if not tokens:
+        return False
+
+    name = os.path.basename(tokens[0])
+    readonly = {
+        "cat", "head", "tail", "file", "stat", "wc",
+        "grep", "rg", "ls", "tree", "ps", "lsof",
+        "awk", "sort", "uniq", "jq",
+    }
+    if name in readonly:
+        return True
+    if name == "less":
+        return "-F" not in tokens and "--quit-if-one-screen" not in tokens
+    if name == "find":
+        return "-delete" not in tokens and "-exec" not in tokens and "-execdir" not in tokens
+    if name == "sed":
+        return not any(t == "-i" or t.startswith("-i") or t == "--in-place" for t in tokens[1:])
+    if name == "git" and len(tokens) > 1:
+        return tokens[1] in {"log", "diff", "show", "status"}
+    if name == "sqlite3":
+        sql = " ".join(tokens[2:]).strip().lower()
+        return bool(sql) and sql.startswith("select") and not re.search(r'\b(insert|update|delete|drop|alter|create|replace|truncate)\b', sql)
+    if name == "curl":
+        method, url = _extract_curl_method_and_url(tokens)
+        if not url:
+            return False
+        destinations = _webhook_internal_destinations()
+        if method == "GET" and _match_internal_url(url, destinations + [
+            "https://mellow-mule-232.convex.cloud/",
+            "https://mellow-mule-232.convex.site/",
+            "https://api.github.com/",
+            "https://github.com/",
+        ]):
+            return True
+        if method == "POST" and url == "https://mellow-mule-232.convex.cloud/api/mutation":
+            return _is_grant_review_mutation_curl(method, url, tokens)
+        return method == "POST" and _match_internal_url(url, destinations)
+    if name in {"python", "python3", "node"} and len(tokens) >= 3 and tokens[1] in {"-c", "-e"}:
+        code = tokens[2].lower()
+        blocked = {"subprocess", "os.system", "popen", "child_process", "exec(", "spawn("}
+        return not any(term in code for term in blocked)
+    return False
+
+
+def _is_webhook_blocked_terminal_write(command: str) -> bool:
+    if not _is_webhook_session() or not _webhook_terminal_readonly_enabled():
+        return False
+    tokens = _split_webhook_terminal_command(command)
+    if not tokens:
+        if command.strip():
+            logger.warning(
+                "Webhook command denied: shell control operator present (command: %s)",
+                command[:200],
+            )
+            return True
+        return False
+    if os.path.basename(tokens[0]) != "curl":
+        return False
+    method, url = _extract_curl_method_and_url(tokens)
+    if method != "POST":
+        return False
+    if url == "https://mellow-mule-232.convex.cloud/api/mutation":
+        if _is_grant_review_mutation_curl(method, url, tokens):
+            return False
+        logger.warning("Webhook curl POST denied: not allowlisted (url: %s)", url)
+        return True
+    logger.warning("Webhook curl POST denied: not allowlisted (url: %s)", url)
+    return True
+
+
+
+def _iter_execute_code_string_literals(code: str):
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        yield code
+        return
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            yield node.value
+
+
+def _is_webhook_blocked_execute_code(code: str) -> bool:
+    """Fail closed when execute_code embeds a non-allowlisted webhook curl POST."""
+    if not _is_webhook_session() or not _webhook_terminal_readonly_enabled():
+        return False
+    for text in _iter_execute_code_string_literals(code):
+        for line in text.splitlines():
+            if "curl" not in line:
+                continue
+            command = line.strip()
+            start = command.find("curl")
+            if start > 0:
+                command = command[start:]
+            if _is_webhook_blocked_terminal_write(command):
+                return True
+    return False
 
 def _smart_approve(command: str, description: str) -> str:
     """Use the auxiliary LLM to assess risk and decide approval.
@@ -1283,6 +1658,11 @@ def check_all_command_guards(command: str, env_type: str,
                     }
         return {"approved": True, "message": None}
 
+    if _is_webhook_readonly_terminal_command(command):
+        return {"approved": True, "message": None, "webhook_allowlisted": True}
+    if _is_webhook_blocked_terminal_write(command):
+        return {"approved": False, "message": "BLOCKED: Webhook curl POST is not allowlisted."}
+
     # --- Phase 1: Gather findings from both checks ---
 
     # Tirith check — wrapper guarantees no raise for expected failures.
@@ -1540,7 +1920,7 @@ def check_execute_code_guard(code: str, env_type: str) -> dict:
 
     # Isolated backends already sandbox the child — matches the container skip
     # in check_all_command_guards / check_dangerous_command.
-    if env_type in {"docker", "singularity", "modal", "daytona", "vercel_sandbox"}:
+    if env_type in {"docker", "singularity", "modal", "daytona"}:
         return {"approved": True, "message": None}
 
     # --yolo or approvals.mode=off: bypass (session- or process-scoped).
@@ -1550,6 +1930,9 @@ def check_execute_code_guard(code: str, env_type: str) -> dict:
 
     is_gateway = _is_gateway_approval_context()
     is_ask = env_var_enabled("HERMES_EXEC_ASK")
+
+    if _is_webhook_blocked_execute_code(code):
+        return {"approved": False, "message": "BLOCKED: Webhook curl POST is not allowlisted."}
 
     # Cron: no user is present to approve arbitrary code.
     if env_var_enabled("HERMES_CRON_SESSION"):

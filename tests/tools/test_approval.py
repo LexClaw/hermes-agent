@@ -44,6 +44,367 @@ class TestSmartApproval:
         assert mock_call.call_args.kwargs["temperature"] == 0
         assert mock_call.call_args.kwargs["max_tokens"] == 16
 
+class TestWebhookReadonlyAllowlist:
+    def _config(self):
+        return {
+            "approvals": {"mode": "manual"},
+            "safety": {
+                "webhook_allowlist": {
+                    "terminal_readonly": True,
+                    "internal_destinations": [
+                        "telegram:-1003914984528:256",
+                        "https://mellow-mule-232.convex.cloud/api/*",
+                    ],
+                }
+            }
+        }
+
+    def _check(self, command, route_name="grant-auto-review"):
+        def session_env(key, default=""):
+            if key == "HERMES_SESSION_PLATFORM":
+                return "webhook"
+            if key == "HERMES_SESSION_USER_NAME":
+                return route_name
+            return default
+
+        with mock_patch("hermes_cli.config.load_config", return_value=self._config()):
+            token = approval_module._approval_session_key.set("webhook-test")
+            try:
+                env = {"HERMES_CRON_SESSION": "", "HERMES_GATEWAY_SESSION": "true"}
+                with mock_patch.dict("os.environ", env, clear=False):
+                    with mock_patch("gateway.session_context.get_session_env", side_effect=session_env):
+                        with mock_patch.dict(approval_module._session_approved, {"webhook-test": set()}, clear=True):
+                            with mock_patch.dict(approval_module._gateway_notify_cbs, {}, clear=True):
+                                with mock_patch.object(approval_module, "_permanent_approved", set()):
+                                    # Neutralize process-level YOLO freeze so the allowlist path is
+                                    # actually exercised. _YOLO_MODE_FROZEN is captured from
+                                    # HERMES_YOLO_MODE at import; if the runner's env has it set, the
+                                    # guard short-circuits before the webhook branch and these
+                                    # assertions silently pass for the wrong reason.
+                                    with mock_patch.object(approval_module, "_YOLO_MODE_FROZEN", False):
+                                        return approval_module.check_all_command_guards(command, "local")
+            finally:
+                approval_module._approval_session_key.reset(token)
+
+    def test_webhook_allows_readonly_search_without_prompt(self):
+        result = self._check('grep -r "foo" /Users/TJ/.hermes/skills/')
+        assert result["approved"] is True
+        assert result.get("webhook_allowlisted") is True
+
+    def test_webhook_blocks_configured_mc_comment_post(self):
+        result = self._check('curl -s -X POST https://mellow-mule-232.convex.site/api/tasks/comment')
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_blocks_operator_bearing_curls_without_prompt(self):
+        commands = [
+            "curl -s https://mellow-mule-232.convex.cloud/api/mutation | jq .",
+            "curl -s -X POST https://mellow-mule-232.convex.cloud/api/mutation && echo done",
+            "curl -s -X POST https://mellow-mule-232.convex.cloud/api/mutation --data-binary $(cat /tmp/grant_verdict_test.json)",
+        ]
+        with mock_patch.object(approval_module, "prompt_dangerous_approval") as prompt:
+            results = [self._check(command) for command in commands]
+        prompt.assert_not_called()
+        for result in results:
+            assert result["approved"] is False
+            assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_blocks_bare_grant_verdict_update_notes_post(self):
+        command = self._curl_mutation_with_data(
+            repr(self._grant_update_notes_payload(self._grant_verdict_notes()))
+        )
+        result = self._check(command)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_allows_grant_verdict_update_notes_post_with_reason(self):
+        reason = "Specific gap: build evidence is missing, so Reid must run npx next build and post the exact output."
+        command = self._curl_mutation_with_data(
+            repr(self._grant_update_notes_payload(self._grant_verdict_notes(reason=reason)))
+        )
+        result = self._check(command)
+        assert result["approved"] is True
+        assert result.get("webhook_allowlisted") is True
+
+    def _grant_update_notes_payload(self, notes):
+        import json
+        return json.dumps({
+            "path": "tasks:updateNotes",
+            "args": {"id": "kn715rhv354j03jchj738137qh87te4m", "notes": notes},
+        })
+
+    def _grant_verdict_notes(self, verdict="CHANGES_REQUIRED", reason=None):
+        body = ""
+        if reason is not None:
+            body = f"\n{reason}"
+        return f"<!-- grant-verdict:2026-06-01T12:00:00Z:{verdict}:attempt=test-attempt -->{body}"
+
+    def _curl_mutation_with_data(self, data_arg):
+        return (
+            "curl -s -X POST https://mellow-mule-232.convex.cloud/api/mutation "
+            "-H 'content-type: application/json' "
+            f"--data-binary {data_arg}"
+        )
+
+    def _write_grant_tmp_payload(self, tmp_path, name, payload, suffix="json"):
+        tmp_dir = Path("/tmp")
+        path = tmp_dir / f"grant_verdict_{os.getpid()}_{tmp_path.resolve().name}_{name}.{suffix}"
+        path.write_text(payload, encoding="utf-8")
+        return path
+
+    def test_webhook_allows_grant_verdict_update_notes_post_regression(self):
+        reason = "Regression proof: actionable Grant notes survive the webhook gate and name the exact missing evidence."
+        command = self._curl_mutation_with_data(
+            repr(self._grant_update_notes_payload(self._grant_verdict_notes(reason=reason)))
+        )
+        result = self._check(command)
+        assert result["approved"] is True
+        assert result.get("webhook_allowlisted") is True
+
+    def test_webhook_allows_inline_grant_verdict_with_pipe_in_json_string(self):
+        # Pipes inside the quoted JSON payload are verdict text, not shell
+        # control operators. Blocking them forced Grant toward @file payloads
+        # that can leave service-token JSON in /tmp.
+        notes = self._grant_verdict_notes(
+            verdict="PASS",
+            reason="Evidence: `pytest -q | tail -5` output was reviewed; verdict text may cite shell pipes safely.",
+        )
+        command = self._curl_mutation_with_data(
+            repr(self._grant_update_notes_payload(notes))
+        )
+        result = self._check(command)
+        assert result["approved"] is True
+        assert result.get("webhook_allowlisted") is True
+
+    def test_webhook_still_blocks_unquoted_pipe_operator(self):
+        reason = "Specific gap: build evidence is missing, so Reid must run npx next build and post the exact output."
+        command = self._curl_mutation_with_data(
+            repr(self._grant_update_notes_payload(self._grant_verdict_notes(reason=reason)))
+        ) + " | jq ."
+        result = self._check(command)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_still_blocks_unquoted_command_substitution(self):
+        reason = "Specific gap: build evidence is missing, so Reid must run npx next build and post the exact output."
+        command = self._curl_mutation_with_data(
+            repr(self._grant_update_notes_payload(self._grant_verdict_notes(reason=reason)))
+        ) + " $(touch /tmp/grant_injected)"
+        result = self._check(command)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_still_blocks_unquoted_backtick_command_substitution(self):
+        reason = "Specific gap: build evidence is missing, so Reid must run npx next build and post the exact output."
+        command = self._curl_mutation_with_data(
+            repr(self._grant_update_notes_payload(self._grant_verdict_notes(reason=reason)))
+        ) + " `touch /tmp/grant_injected`"
+        result = self._check(command)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_allows_inline_grant_verdict_with_literal_dollar_paren_in_json_string(self):
+        notes = self._grant_verdict_notes(
+            verdict="PASS",
+            reason="Evidence: JSON verdict text may include literal $(not a shell operator) safely when quoted.",
+        )
+        command = self._curl_mutation_with_data(
+            repr(self._grant_update_notes_payload(notes))
+        )
+        result = self._check(command)
+        assert result["approved"] is True
+        assert result.get("webhook_allowlisted") is True
+
+    def test_webhook_allows_confined_grant_verdict_atfile(self, tmp_path):
+        payload_path = self._write_grant_tmp_payload(
+            Path("tmp"),
+            "marker",
+            self._grant_update_notes_payload(self._grant_verdict_notes(reason="Specific gap: artifact path missing, so Reid must write the report file and cite it.")),
+        )
+        try:
+            result = self._check(self._curl_mutation_with_data(f"@{payload_path}"))
+        finally:
+            payload_path.unlink(missing_ok=True)
+        assert result["approved"] is True
+        assert result.get("webhook_allowlisted") is True
+
+    def test_webhook_blocks_confined_grant_atfile_without_marker(self, tmp_path):
+        payload_path = self._write_grant_tmp_payload(
+            Path("tmp"),
+            "no_marker",
+            self._grant_update_notes_payload("generic notes write"),
+        )
+        try:
+            result = self._check(self._curl_mutation_with_data(f"@{payload_path}"))
+        finally:
+            payload_path.unlink(missing_ok=True)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_blocks_outside_tmp_atfile_without_reading(self, tmp_path):
+        payload_path = tmp_path / "evil.json"
+        payload_path.write_text(
+            self._grant_update_notes_payload(self._grant_verdict_notes(reason="Specific gap: artifact path missing, so Reid must write the report file and cite it.")),
+            encoding="utf-8",
+        )
+        with mock_patch("builtins.open", side_effect=AssertionError("outside @file was read")):
+            result = self._check(self._curl_mutation_with_data(f"@{payload_path}"))
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_blocks_sensitive_atfile_without_reading(self):
+        with mock_patch("builtins.open", side_effect=AssertionError("sensitive @file was read")):
+            result = self._check(self._curl_mutation_with_data("@/Users/TJ/.hermes/.env"))
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_blocks_path_traversal_grant_atfile(self):
+        with mock_patch("builtins.open", side_effect=AssertionError("traversal @file was read")):
+            result = self._check(self._curl_mutation_with_data("@/tmp/grant_verdict_../../etc/passwd"))
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_blocks_missing_confined_grant_atfile_without_crashing(self, tmp_path):
+        missing_path = Path(f"/tmp/grant_verdict_{os.getpid()}_{tmp_path.name}_missing.json")
+        missing_path.unlink(missing_ok=True)
+        result = self._check(self._curl_mutation_with_data(f"@{missing_path}"))
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_blocks_other_mutation_with_confined_grant_atfile(self, tmp_path):
+        payload_path = self._write_grant_tmp_payload(
+            Path("tmp"),
+            "other_mutation",
+            '{"path":"tasks:updateDescription","args":{"id":"kn715rhv354j03jchj738137qh87te4m",'
+            '"description":"<!-- grant-verdict: not a notes verdict write -->"}}',
+        )
+        try:
+            result = self._check(self._curl_mutation_with_data(f"@{payload_path}"))
+        finally:
+            payload_path.unlink(missing_ok=True)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_blocks_confined_grant_symlink_escape(self, tmp_path):
+        secret_path = tmp_path / "secret.json"
+        secret_path.write_text(
+            self._grant_update_notes_payload(self._grant_verdict_notes(reason="Specific gap: artifact path missing, so Reid must write the report file and cite it.")),
+            encoding="utf-8",
+        )
+        symlink_path = Path(f"/tmp/grant_verdict_{os.getpid()}_{tmp_path.name}_symlink.json")
+        symlink_path.unlink(missing_ok=True)
+        symlink_path.symlink_to(secret_path)
+        try:
+            result = self._check(self._curl_mutation_with_data(f"@{symlink_path}"))
+        finally:
+            symlink_path.unlink(missing_ok=True)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_allows_grant_mark_changes_required_post(self):
+        command = (
+            "curl -s -X POST https://mellow-mule-232.convex.cloud/api/mutation "
+            "-H 'content-type: application/json' "
+            "-d '{\"path\":\"tasks:markChangesRequired\",\"args\":{\"id\":\"kn715rhv354j03jchj738137qh87te4m\"}}'"
+        )
+        result = self._check(command)
+        assert result["approved"] is True
+        assert result.get("webhook_allowlisted") is True
+
+    def test_webhook_blocks_grant_verdict_update_notes_from_other_route(self):
+        reason = "Specific gap: route isolation must prevent any non-Grant webhook from writing Grant verdict notes."
+        command = self._curl_mutation_with_data(
+            repr(self._grant_update_notes_payload(self._grant_verdict_notes(reason=reason)))
+        )
+        result = self._check(command, route_name="other-webhook")
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_allows_grant_update_status_done_post(self):
+        command = (
+            "curl -s -X POST https://mellow-mule-232.convex.cloud/api/mutation "
+            "-H 'content-type: application/json' "
+            "-d '{\"path\":\"tasks:updateStatus\",\"args\":{\"id\":\"kn715rhv354j03jchj738137qh87te4m\",\"status\":\"done\"}}'"
+        )
+        result = self._check(command)
+        assert result["approved"] is True
+        assert result.get("webhook_allowlisted") is True
+
+    def test_webhook_blocks_grant_update_status_non_done_post(self):
+        command = (
+            "curl -s -X POST https://mellow-mule-232.convex.cloud/api/mutation "
+            "-H 'content-type: application/json' "
+            "-d '{\"path\":\"tasks:updateStatus\",\"args\":{\"id\":\"kn715rhv354j03jchj738137qh87te4m\",\"status\":\"in_review\"}}'"
+        )
+        result = self._check(command)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_blocks_generic_update_notes_post_without_grant_marker(self):
+        command = (
+            "curl -s -X POST https://mellow-mule-232.convex.cloud/api/mutation "
+            "-H 'content-type: application/json' "
+            "-d '{\"path\":\"tasks:updateNotes\",\"args\":{\"id\":\"kn715rhv354j03jchj738137qh87te4m\",\"notes\":\"generic notes write\"}}'"
+        )
+        result = self._check(command)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_blocks_update_notes_marker_outside_notes_field(self):
+        command = (
+            "curl -s -X POST https://mellow-mule-232.convex.cloud/api/mutation "
+            "-H 'content-type: application/json' "
+            "-d '{\"path\":\"tasks:updateNotes\",\"args\":{\"id\":\"kn715rhv354j03jchj738137qh87te4m\",\"notes\":\"generic notes write\",\"description\":\"<!-- grant-verdict: smuggled -->\"}}'"
+        )
+        result = self._check(command)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_blocks_other_free_text_mutation_writes(self):
+        command = (
+            "curl -s -X POST https://mellow-mule-232.convex.cloud/api/mutation "
+            "-H 'content-type: application/json' "
+            "-d '{\"path\":\"tasks:updateDescription\",\"args\":{\"id\":\"kn715rhv354j03jchj738137qh87te4m\",\"description\":\"<!-- grant-verdict: not a notes verdict write -->\"}}'"
+        )
+        result = self._check(command)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_blocks_remove_mutation_post(self):
+        command = (
+            "curl -s -X POST https://mellow-mule-232.convex.cloud/api/mutation "
+            "-H 'content-type: application/json' "
+            "-d '{\"path\":\"tasks:remove\",\"args\":{\"id\":\"kn715rhv354j03jchj738137qh87te4m\"}}'"
+        )
+        result = self._check(command)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_blocks_archive_mutation_post(self):
+        command = (
+            "curl -s -X POST https://mellow-mule-232.convex.cloud/api/mutation "
+            "-H 'content-type: application/json' "
+            "-d '{\"path\":\"tasks:archive\",\"args\":{\"id\":\"kn715rhv354j03jchj738137qh87te4m\"}}'"
+        )
+        result = self._check(command)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_blocks_task_comment_add_mutation_post(self):
+        command = (
+            "curl -s -X POST https://mellow-mule-232.convex.cloud/api/mutation "
+            "-H 'content-type: application/json' "
+            "-d '{\"path\":\"taskComments:add\",\"args\":{\"taskId\":\"kn715rhv354j03jchj738137qh87te4m\",\"body\":\"comment\"}}'"
+        )
+        result = self._check(command)
+        assert result["approved"] is False
+        assert result.get("webhook_allowlisted") is not True
+
+    def test_webhook_still_blocks_recursive_delete(self):
+        result = self._check("rm -rf /tmp/test/")
+        assert result["approved"] is False
+        assert "approval" in result.get("status", "") or "BLOCKED" in result.get("message", "")
+
 
 class TestDetectDangerousRm:
     def test_rm_rf_detected(self):
