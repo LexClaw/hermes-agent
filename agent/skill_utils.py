@@ -314,6 +314,48 @@ def get_disabled_skill_names(platform: str | None = None) -> Set[str]:
     return _normalize_string_set(skills_cfg.get("disabled"))
 
 
+def get_resolver_routed_skill_names(platform: str | None = None) -> Set[str]:
+    """Read resolver_routed skill names from config.yaml.
+
+    Args:
+        platform: Explicit platform name (e.g. ``"telegram"``).  When
+            *None*, resolves from ``HERMES_PLATFORM`` or
+            ``HERMES_SESSION_PLATFORM`` env vars.  Falls back to the
+            global resolver_routed list when no platform is determined.
+
+    Reads the config file directly (no CLI config imports) to stay
+    lightweight.
+    """
+    config_path = get_config_path()
+    if not config_path.exists():
+        return set()
+    try:
+        parsed = yaml_load(config_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.debug("Could not read skill config %s: %s", config_path, e)
+        return set()
+    if not isinstance(parsed, dict):
+        return set()
+
+    skills_cfg = parsed.get("skills")
+    if not isinstance(skills_cfg, dict):
+        return set()
+
+    from gateway.session_context import get_session_env
+    resolved_platform = (
+        platform
+        or os.getenv("HERMES_PLATFORM")
+        or get_session_env("HERMES_SESSION_PLATFORM")
+    )
+    if resolved_platform:
+        platform_resolver_routed = (skills_cfg.get("platform_resolver_routed") or {}).get(
+            resolved_platform
+        )
+        if platform_resolver_routed is not None:
+            return _normalize_string_set(platform_resolver_routed)
+    return _normalize_string_set(skills_cfg.get("resolver_routed"))
+
+
 def _normalize_string_set(values) -> Set[str]:
     if values is None:
         return set()

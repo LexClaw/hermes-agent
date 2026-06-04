@@ -20,6 +20,7 @@ from agent.skill_utils import (
     extract_skill_description,
     get_all_skills_dirs,
     get_disabled_skill_names,
+    get_resolver_routed_skill_names,
     iter_skill_index_files,
     parse_frontmatter,
     skill_matches_environment,
@@ -891,7 +892,7 @@ CONTEXT_TRUNCATE_TAIL_RATIO = 0.2
 _SKILLS_PROMPT_CACHE_MAX = 8
 _SKILLS_PROMPT_CACHE: OrderedDict[tuple, str] = OrderedDict()
 _SKILLS_PROMPT_CACHE_LOCK = threading.Lock()
-_SKILLS_SNAPSHOT_VERSION = 1
+_SKILLS_SNAPSHOT_VERSION = 2
 
 
 def _skills_prompt_snapshot_path() -> Path:
@@ -1084,6 +1085,8 @@ def build_skills_system_prompt(
         or ""
     )
     disabled = get_disabled_skill_names()
+    resolver_routed = get_resolver_routed_skill_names()
+    manifest_suppressed = disabled | resolver_routed
     cache_key = (
         str(skills_dir.resolve()),
         tuple(str(d) for d in external_dirs),
@@ -1091,6 +1094,7 @@ def build_skills_system_prompt(
         tuple(sorted(str(ts) for ts in (available_toolsets or set()))),
         _platform_hint,
         tuple(sorted(disabled)),
+        tuple(sorted(resolver_routed)),
     )
     with _SKILLS_PROMPT_CACHE_LOCK:
         cached = _SKILLS_PROMPT_CACHE.get(cache_key)
@@ -1115,7 +1119,7 @@ def build_skills_system_prompt(
             platforms = entry.get("platforms") or []
             if not skill_matches_platform({"platforms": platforms}):
                 continue
-            if frontmatter_name in disabled or skill_name in disabled:
+            if frontmatter_name in manifest_suppressed or skill_name in manifest_suppressed:
                 continue
             if not _skill_should_show(
                 entry.get("conditions") or {},
@@ -1140,7 +1144,7 @@ def build_skills_system_prompt(
             if not is_compatible:
                 continue
             skill_name = entry["skill_name"]
-            if entry["frontmatter_name"] in disabled or skill_name in disabled:
+            if entry["frontmatter_name"] in manifest_suppressed or skill_name in manifest_suppressed:
                 continue
             if not _skill_should_show(
                 extract_skill_conditions(frontmatter),
@@ -1195,7 +1199,7 @@ def build_skills_system_prompt(
                 frontmatter_name = entry["frontmatter_name"]
                 if frontmatter_name in seen_skill_names:
                     continue
-                if frontmatter_name in disabled or skill_name in disabled:
+                if frontmatter_name in manifest_suppressed or skill_name in manifest_suppressed:
                     continue
                 if not _skill_should_show(
                     extract_skill_conditions(frontmatter),

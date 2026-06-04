@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 import tools.skills_tool as skills_tool_module
+from agent.prompt_builder import build_skills_system_prompt
 from tools.skills_tool import (
     _get_required_environment_variables,
     _parse_frontmatter,
@@ -507,6 +508,107 @@ class TestSkillView:
         result = json.loads(raw)
         assert result["success"] is False
         assert "disabled" in result["error"].lower()
+
+    def test_view_resolver_routed_skill_loads_successfully(self, tmp_path):
+        """Skills in resolver_routed should load via skill_view (NOT blocked like disabled)."""
+        from unittest.mock import patch
+        
+        # Mock the skill as resolver_routed but NOT disabled
+        with (
+            patch("tools.skills_tool.SKILLS_DIR", tmp_path),
+            patch(
+                "tools.skills_tool._is_skill_disabled",
+                return_value=False,  # NOT disabled
+            ),
+            patch(
+                "agent.skill_utils.get_resolver_routed_skill_names",
+                return_value={"resolver-skill"},  # IS resolver_routed
+            ),
+        ):
+            _make_skill(tmp_path, "resolver-skill")
+            raw = skill_view("resolver-skill")
+        result = json.loads(raw)
+        assert result["success"] is True  # Should load successfully
+        assert "resolver-skill" in result["content"]
+        
+    def test_disabled_vs_resolver_routed_behavior(self, tmp_path):
+        """Verify disabled skills blocked, resolver_routed skills loadable."""
+        from unittest.mock import patch
+        
+        # Test disabled skill is blocked
+        with (
+            patch("tools.skills_tool.SKILLS_DIR", tmp_path),
+            patch(
+                "tools.skills_tool._is_skill_disabled",
+                return_value=True,  # IS disabled
+            ),
+        ):
+            _make_skill(tmp_path, "disabled-skill")
+            raw = skill_view("disabled-skill")
+        result = json.loads(raw)
+        assert result["success"] is False
+        assert "disabled" in result["error"].lower()
+        
+        # Test resolver_routed skill loads successfully
+        with (
+            patch("tools.skills_tool.SKILLS_DIR", tmp_path),
+            patch(
+                "tools.skills_tool._is_skill_disabled",
+                return_value=False,  # NOT disabled
+            ),
+            patch(
+                "agent.skill_utils.get_resolver_routed_skill_names", 
+                return_value={"resolver-skill"},  # IS resolver_routed
+            ),
+        ):
+            _make_skill(tmp_path, "resolver-skill")
+            raw = skill_view("resolver-skill")
+        result = json.loads(raw)
+        assert result["success"] is True  # Should load successfully
+
+    def test_end_to_end_resolver_routing(self, tmp_path, monkeypatch):
+        """Integration test: resolver_routed skill suppressed from manifest but loads via skill_view."""
+        from unittest.mock import patch
+        
+        # Set up test environment
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skills_dir = tmp_path / "skills" / "tools"
+        skills_dir.mkdir(parents=True)
+        
+        # Create a skill that would be resolver_routed
+        resolver_skill = skills_dir / "special-resolver"
+        resolver_skill.mkdir()
+        (resolver_skill / "SKILL.md").write_text(
+            "---\nname: special-resolver\ndescription: Special resolver tool\n---\n"
+            "This skill is routed by the resolver."
+        )
+        
+        # Create a normal skill for comparison  
+        normal_skill = skills_dir / "web-search"
+        normal_skill.mkdir()
+        (normal_skill / "SKILL.md").write_text(
+            "---\nname: web-search\ndescription: Search the web\n---\n"
+            "Normal web search skill."
+        )
+        
+        # Test 1: Manifest suppression (offer-time)
+        with patch(
+            "agent.prompt_builder.get_resolver_routed_skill_names",
+            return_value={"special-resolver"},
+        ):
+            manifest = build_skills_system_prompt()
+            
+        assert "web-search" in manifest, "Normal skill should appear in manifest"
+        assert "special-resolver" not in manifest, "Resolver_routed skill should NOT appear in manifest"
+        
+        # Test 2: skill_view load (load-time) - resolver_routed skill should load successfully
+        with patch("tools.skills_tool.SKILLS_DIR", skills_dir):
+            raw = skill_view("special-resolver")
+            
+        result = json.loads(raw)
+        assert result["success"] is True, "Resolver_routed skill should load successfully via skill_view"
+        assert "special-resolver" in result["content"], "Should return skill content"
+        assert "Special resolver tool" in result["content"], "Should contain skill description"
 
     def test_view_enabled_skill_allowed(self, tmp_path):
         """Non-disabled skills should be viewable normally."""

@@ -353,6 +353,35 @@ class TestBuildSkillsSystemPrompt:
         assert "web-search" in result
         assert "old-tool" not in result
 
+    def test_excludes_resolver_routed_skills(self, monkeypatch, tmp_path):
+        """Skills in the resolver_routed list should not appear in the system prompt."""
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skills_dir = tmp_path / "skills" / "tools"
+        skills_dir.mkdir(parents=True)
+
+        enabled_skill = skills_dir / "web-search"
+        enabled_skill.mkdir()
+        (enabled_skill / "SKILL.md").write_text(
+            "---\nname: web-search\ndescription: Search the web\n---\n"
+        )
+
+        resolver_routed_skill = skills_dir / "special-tool"
+        resolver_routed_skill.mkdir()
+        (resolver_routed_skill / "SKILL.md").write_text(
+            "---\nname: special-tool\ndescription: Special resolver tool\n---\n"
+        )
+
+        from unittest.mock import patch
+
+        with patch(
+            "agent.prompt_builder.get_resolver_routed_skill_names",
+            return_value={"special-tool"},
+        ):
+            result = build_skills_system_prompt()
+
+        assert "web-search" in result
+        assert "special-tool" not in result
+
     def test_rebuilds_prompt_when_disabled_skills_change(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         skill_dir = tmp_path / "skills" / "tools" / "cached-skill"
@@ -370,6 +399,87 @@ class TestBuildSkillsSystemPrompt:
 
         second = build_skills_system_prompt()
         assert "cached-skill" not in second
+
+    def test_cache_invalidation_resolver_routed(self, monkeypatch, tmp_path):
+        """Test cache invalidation when resolver_routed skills change and version bumps."""
+        import json
+        from unittest.mock import patch
+        
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        skills_dir = tmp_path / "skills" / "tools"
+        skills_dir.mkdir(parents=True)
+        
+        # Create test skills
+        for skill_name in ["skill-a", "skill-b"]:
+            skill_dir = skills_dir / skill_name
+            skill_dir.mkdir()
+            (skill_dir / "SKILL.md").write_text(
+                f"---\nname: {skill_name}\ndescription: Test skill {skill_name}\n---\n"
+            )
+        
+        # Test (a): Add skill to resolver_routed, verify it's absent from rebuilt manifest
+        with patch(
+            "agent.prompt_builder.get_resolver_routed_skill_names",
+            return_value=set(),  # Empty initially
+        ):
+            first_manifest = build_skills_system_prompt()
+            
+        assert "skill-a" in first_manifest, "skill-a should be present initially"
+        assert "skill-b" in first_manifest, "skill-b should be present initially"
+        
+        # Now add skill-a to resolver_routed
+        with patch(
+            "agent.prompt_builder.get_resolver_routed_skill_names",
+            return_value={"skill-a"},  # skill-a now resolver_routed
+        ):
+            second_manifest = build_skills_system_prompt()
+            
+        assert "skill-a" not in second_manifest, "skill-a should be absent after resolver_routed"
+        assert "skill-b" in second_manifest, "skill-b should still be present"
+        
+        # Test (b): Cache invalidation - create a pre-existing v1 disk snapshot and verify it's rejected
+        snapshot_path = tmp_path / ".skills_prompt_snapshot.json"
+        
+        # Create a fake v1 snapshot
+        fake_v1_snapshot = {
+            "version": 1,  # Old version
+            "skills": [
+                {
+                    "skill_name": "old-cached-skill",
+                    "frontmatter_name": "old-cached-skill", 
+                    "category": "tools",
+                    "description": "Old cached skill",
+                    "platforms": [],
+                    "conditions": {}
+                }
+            ],
+            "category_descriptions": {},
+            "manifest": {"size": 123, "mtime": 1234567890.0}
+        }
+        
+        snapshot_path.write_text(json.dumps(fake_v1_snapshot))
+        assert snapshot_path.exists(), "Fake v1 snapshot should exist"
+        
+        # Clear any in-process cache
+        from agent.prompt_builder import _SKILLS_PROMPT_CACHE
+        _SKILLS_PROMPT_CACHE.clear()
+        
+        # Build prompt - should reject v1 snapshot due to version mismatch
+        with patch(
+            "agent.prompt_builder.get_resolver_routed_skill_names",
+            return_value=set(),
+        ):
+            rebuilt_manifest = build_skills_system_prompt()
+            
+        # Verify the old cached skill is NOT in the rebuilt manifest
+        assert "old-cached-skill" not in rebuilt_manifest, "Old v1 cached skill should not appear"
+        assert "skill-a" in rebuilt_manifest, "Real skills should appear after cache rebuild"
+        assert "skill-b" in rebuilt_manifest, "Real skills should appear after cache rebuild"
+        
+        # Verify snapshot was updated to v2
+        if snapshot_path.exists():
+            updated_snapshot = json.loads(snapshot_path.read_text())
+            assert updated_snapshot.get("version") == 2, "Snapshot should be updated to v2"
 
     def test_includes_setup_needed_skills(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))

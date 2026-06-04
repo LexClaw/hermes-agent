@@ -10,6 +10,10 @@ Config stored in ~/.hermes/config.yaml under:
     platform_disabled:                    # per-platform overrides
       telegram: [skill-c]
       cli: []
+    resolver_routed: [skill-d, skill-e]   # global resolver_routed list
+    platform_resolver_routed:             # per-platform overrides
+      telegram: [skill-f]
+      cli: []
 """
 from typing import List, Optional, Set
 
@@ -44,6 +48,29 @@ def save_disabled_skills(config: dict, disabled: Set[str], platform: Optional[st
     else:
         config["skills"].setdefault("platform_disabled", {})
         config["skills"]["platform_disabled"][platform] = sorted(disabled)
+    save_config(config)
+
+
+def get_resolver_routed_skills(config: dict, platform: Optional[str] = None) -> Set[str]:
+    """Return resolver_routed skill names. Platform-specific list falls back to global."""
+    skills_cfg = config.get("skills", {})
+    global_resolver_routed = set(skills_cfg.get("resolver_routed", []))
+    if platform is None:
+        return global_resolver_routed
+    platform_resolver_routed = cfg_get(skills_cfg, "platform_resolver_routed", platform)
+    if platform_resolver_routed is None:
+        return global_resolver_routed
+    return set(platform_resolver_routed)
+
+
+def save_resolver_routed_skills(config: dict, resolver_routed: Set[str], platform: Optional[str] = None):
+    """Persist resolver_routed skill names to config."""
+    config.setdefault("skills", {})
+    if platform is None:
+        config["skills"]["resolver_routed"] = sorted(resolver_routed)
+    else:
+        config["skills"].setdefault("platform_resolver_routed", {})
+        config["skills"]["platform_resolver_routed"][platform] = sorted(resolver_routed)
     save_config(config)
 
 
