@@ -122,6 +122,12 @@ _ANTHROPIC_OUTPUT_LIMITS = {
     # Qwen models via DashScope Anthropic-compatible endpoint
     # DashScope enforces max_tokens ∈ [1, 65536]
     "qwen3":               65_536,
+    # Date-stamped variants (also in _PROVIDER_MODELS["anthropic"])
+    "claude-opus-4-20250514":      32_000,
+    "claude-sonnet-4-20250514":    64_000,
+    "claude-opus-4-5-20251101":    64_000,
+    "claude-sonnet-4-5-20250929":  64_000,
+    "claude-haiku-4-5-20251001":   64_000,
 }
 
 # For any model not in the table, assume the highest current limit.
@@ -1382,6 +1388,53 @@ def normalize_model_name(model: str, preserve_dots: bool = False) -> str:
         if _lower.startswith("claude-") or _lower.startswith("anthropic/"):
             model = model.replace(".", "-")
     return model
+
+
+_ALL_REGISTERED_MODEL_KEYS = list(_ANTHROPIC_OUTPUT_LIMITS.keys())
+
+
+def resolve_anthropic_model_id(model: str) -> str:
+    """Normalize a model ID for the direct Anthropic provider and verify it.
+
+    1. Calls :func:`normalize_model_name` to strip an ``anthropic/`` prefix
+       and convert dots to hyphens (e.g. ``anthropic/claude-opus-4.8`` →
+       ``claude-opus-4-8``).
+    2. Checks the normalized id against the registered model table
+       (``_ANTHROPIC_OUTPUT_LIMITS``).
+    3. Returns the resolved bare id when a match is found.
+    4. Raises ``ValueError`` when the id is still unresolvable after
+       normalization — the error names the original input, the provider,
+       and a selection of registered ids so the caller can diagnose the
+       issue without silently falling back to a different model.
+    """
+    normalized = normalize_model_name(model)
+
+    # Check for an exact match against the registered table.
+    if normalized in _ANTHROPIC_OUTPUT_LIMITS:
+        return normalized
+
+    # Substring fallback so date-stamped ids (claude-opus-4-20250514) and
+    # variant suffixes (:1m, :fast) still resolve.  Prefer the longest
+    # matching registered key so a datestamped id resolves to its full
+    # registered form rather than a shorter prefix.  Try both directions:
+    # key in normalized (prefix match) and normalized in key (suffix match).
+    best_key: str | None = None
+    for key in _ALL_REGISTERED_MODEL_KEYS:
+        if key == normalized or key in normalized or normalized in key:
+            if best_key is None or len(key) > len(best_key):
+                best_key = key
+    if best_key is not None:
+        return best_key
+
+    # No match — fail loud (card kn7b995np6yzda83ersspkk49x8807fm).
+    samples = ", ".join(sorted(_ALL_REGISTERED_MODEL_KEYS)[:6])
+    raise ValueError(
+        f"Anthropic provider cannot resolve model '{model}' "
+        f"(normalized: '{normalized}') to any registered model. "
+        f"Known models include: {samples} … "
+        f"Fix the model id or add the model to "
+        f"_ANTHROPIC_OUTPUT_LIMITS in agent/anthropic_adapter.py."
+    )
 
 
 def _sanitize_tool_id(tool_id: str) -> str:

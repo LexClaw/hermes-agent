@@ -345,7 +345,7 @@ def normalize_model_for_provider(model_input: str, target_provider: str) -> str:
         expects.
 
     Raises:
-        No exceptions -- always returns a best-effort string.
+        ValueError: For unknown Anthropic model identifiers.
 
     Examples::
 
@@ -408,12 +408,14 @@ def normalize_model_for_provider(model_input: str, target_provider: str) -> str:
             return _dots_to_hyphens(name)
         return name
 
-    # --- Anthropic: strip matching provider prefix, dots -> hyphens ---
+    # --- Anthropic: strip matching provider prefix, dots -> hyphens, validate ---
     if provider in _DOT_TO_HYPHEN_PROVIDERS:
+        from agent.anthropic_adapter import resolve_anthropic_model_id
+
         bare = _strip_matching_provider_prefix(name, provider)
         if "/" in bare:
-            return bare
-        return _dots_to_hyphens(bare)
+            return resolve_anthropic_model_id(bare)
+        return resolve_anthropic_model_id(_dots_to_hyphens(bare))
 
     # --- Copilot / Copilot ACP: delegate to the Copilot-specific
     #     normalizer.  It knows about the alias table (vendor-prefix
