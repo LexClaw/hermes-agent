@@ -4806,6 +4806,8 @@ class AIAgent:
             acp_command=function_args.get("acp_command"),
             acp_args=function_args.get("acp_args"),
             role=function_args.get("role"),
+            model=function_args.get("model"),
+            ale_run_id=function_args.get("ale_run_id"),
             parent_agent=self,
         )
 

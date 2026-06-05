@@ -1930,6 +1930,23 @@ class TestDispatchDelegateTask(unittest.TestCase):
             self.assertEqual(kwargs["override_acp_command"], "claude")
             self.assertEqual(kwargs["override_acp_args"], ["--acp", "--stdio"])
 
+    def test_dispatch_forwards_model_and_ale_run_id(self):
+        """Regression: _dispatch_delegate_task must forward the `model` override
+        (and ale_run_id) to delegate_task. These were omitted from the run_agent
+        forwarder while present in the schema + signature, so every model override
+        silently fell back to the delegation default (the GPT-5.5 -> Sonnet/Opus
+        fallback bug). The forwarder hand-picks kwargs, so a new schema field that
+        isn't added here is dropped before delegate_task ever sees it."""
+        import inspect
+        from run_agent import AIAgent
+
+        src = inspect.getsource(AIAgent._dispatch_delegate_task)
+        # The forwarder must thread these two args through, or overrides vanish.
+        self.assertIn('model=function_args.get("model")', src,
+                      "_dispatch_delegate_task dropped the `model` override")
+        self.assertIn('ale_run_id=function_args.get("ale_run_id")', src,
+                      "_dispatch_delegate_task dropped `ale_run_id`")
+
 class TestDelegateEventEnum(unittest.TestCase):
     """Tests for DelegateEvent enum and back-compat aliases."""
 
