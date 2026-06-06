@@ -449,6 +449,8 @@ def run_bot() -> int:  # noqa: C901 — orchestration, explicit branches
     out_dir_env = os.environ.get("HERMES_MEET_OUT_DIR", "").strip()
     headed = os.environ.get("HERMES_MEET_HEADED", "").lower() in {"1", "true", "yes"}
     auth_state = os.environ.get("HERMES_MEET_AUTH_STATE", "").strip()
+    chrome_profile_dir = os.environ.get("HERMES_MEET_CHROME_PROFILE_DIR", "").strip()
+    chrome_profile_name = os.environ.get("HERMES_MEET_CHROME_PROFILE_NAME", "").strip()
     guest_name = os.environ.get("HERMES_MEET_GUEST_NAME", "Hermes Agent")
     duration_s = _parse_duration(os.environ.get("HERMES_MEET_DURATION", ""))
     # v2: optional realtime mode. Enabled when HERMES_MEET_MODE=realtime.
@@ -552,31 +554,42 @@ def run_bot() -> int:  # noqa: C901 — orchestration, explicit branches
             # via the process env before launch so the child Chrome inherits it.
             for k, v in chrome_env.items():
                 os.environ[k] = v
-            browser = pw.chromium.launch(
-                headless=not headed,
-                args=chrome_args,
-            )
-            context_args = {
-                "viewport": {"width": 1280, "height": 800},
-                "user_agent": _platform_user_agent(),
-                "permissions": ["microphone", "camera"],
-                "locale": "en-US",
-                "timezone_id": "America/New_York",
-            }
-            if auth_state and Path(auth_state).is_file():
-                context_args["storage_state"] = auth_state
-            context = browser.new_context(**context_args)
-            # Layer-2 anti-detection: scrub the WebDriver flag and other
-            # automation tells via init script. Runs in every new document
-            # before any site JS sees them. Meet's anti-bot inspector reads
-            # navigator.webdriver and PluginArray to flag headless sessions;
-            # leaving them at defaults guarantees a pre-lobby denial even
-            # with valid auth cookies.
-            try:
-                context.add_init_script(_STEALTH_INIT_JS)
-            except Exception:
-                pass
-            page = context.new_page()
+
+            if chrome_profile_dir:
+                context = pw.chromium.launch_persistent_context(
+                    user_data_dir=chrome_profile_dir,
+                    channel="chrome",
+                    headless=False,
+                    args=chrome_args + ([f"--profile-directory={chrome_profile_name}"] if chrome_profile_name else []),
+                    viewport={"width": 1280, "height": 800},
+                    permissions=["microphone", "camera"],
+                    locale="en-US",
+                    timezone_id="America/New_York",
+                )
+                browser = None
+            else:
+                browser = pw.chromium.launch(
+                    headless=not headed,
+                    args=chrome_args,
+                )
+                context_args = {
+                    "viewport": {"width": 1280, "height": 800},
+                    "user_agent": _platform_user_agent(),
+                    "permissions": ["microphone", "camera"],
+                    "locale": "en-US",
+                    "timezone_id": "America/New_York",
+                }
+                if auth_state and Path(auth_state).is_file():
+                    context_args["storage_state"] = auth_state
+                context = browser.new_context(**context_args)
+                # Layer-2 anti-detection for Playwright Chromium. The remote-node
+                # path uses a real Chrome profile and should keep its native shape.
+                try:
+                    context.add_init_script(_STEALTH_INIT_JS)
+                except Exception:
+                    pass
+
+            page = context.pages[0] if context.pages else context.new_page()
 
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=30_000)
@@ -747,7 +760,8 @@ def run_bot() -> int:  # noqa: C901 — orchestration, explicit branches
                 pass
 
             context.close()
-            browser.close()
+            if browser is not None:
+                browser.close()
             # v2: teardown realtime speaker + audio bridge.
             if rt["speaker_stop"]:
                 try:

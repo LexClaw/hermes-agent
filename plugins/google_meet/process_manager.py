@@ -140,6 +140,12 @@ def start(
         env["HERMES_MEET_HEADED"] = "1"
     if auth_state:
         env["HERMES_MEET_AUTH_STATE"] = auth_state
+    chrome_profile_dir = os.environ.get("HERMES_MEET_CHROME_PROFILE_DIR")
+    if chrome_profile_dir:
+        env["HERMES_MEET_CHROME_PROFILE_DIR"] = chrome_profile_dir
+    chrome_profile_name = os.environ.get("HERMES_MEET_CHROME_PROFILE_NAME")
+    if chrome_profile_name:
+        env["HERMES_MEET_CHROME_PROFILE_NAME"] = chrome_profile_name
     if duration:
         env["HERMES_MEET_DURATION"] = duration
     # v2: realtime mode + passthroughs. The bot defaults to transcribe

@@ -25,6 +25,8 @@ actually host a node.
 from __future__ import annotations
 
 import json
+import os
+import platform
 import secrets
 import time
 from pathlib import Path
@@ -55,6 +57,53 @@ class NodeServer:
         self._token: Optional[str] = None
 
     # ----- token management --------------------------------------------
+
+    def _default_chrome_profile(self) -> tuple[Optional[str], Optional[str]]:
+        """Return (Chrome user-data root, profile name) for this node, if known."""
+        if platform.system() != "Darwin":
+            return None, None
+        root = Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
+        if not root.is_dir():
+            return None, None
+        local_state = root / "Local State"
+        if not local_state.is_file():
+            return None, None
+        try:
+            data = json.loads(local_state.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            return None, None
+
+        # Prefer lex@hitnetwork.io when present because the Meet bot identity is Lex.
+        profiles = data.get("profile", {}).get("info_cache", {})
+        target_name = None
+        for name, info in profiles.items():
+            if str(info.get("user_name") or "").lower() == "lex@hitnetwork.io":
+                target_name = name
+                break
+        if target_name is None and (root / "Default").is_dir():
+            target_name = "Default"
+        if target_name is None:
+            return None, None
+
+        # Chrome locks the full user-data root while the human browser is open.
+        # Copy just the selected profile plus Local State into a node-owned root
+        # so Playwright can launch real Chrome without forcing TJ to quit Chrome.
+        cache_root = Path(get_hermes_home()) / "workspace" / "meetings" / "chrome-node-profile"
+        cache_root.mkdir(parents=True, exist_ok=True)
+        (cache_root / "Local State").write_text(local_state.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+        src = root / target_name
+        dst = cache_root / target_name
+        try:
+            import shutil
+            shutil.copytree(
+                src,
+                dst,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("Singleton*", "*.lock", "Crashpad", "Code Cache", "GPUCache"),
+            )
+        except OSError:
+            return None, None
+        return str(cache_root), target_name
 
     def ensure_token(self) -> str:
         """Return the persisted shared secret, generating one on first use."""
@@ -125,12 +174,33 @@ class NodeServer:
                 kwargs = {
                     k: payload[k]
                     for k in ("url", "guest_name", "duration", "headed",
-                              "auth_state", "session_id", "out_dir")
+                              "auth_state", "session_id", "out_dir", "mode")
                     if k in payload
                 }
                 if "url" not in kwargs:
                     return _proto.make_error(req_id, "missing 'url' in payload")
-                result = pm.start(**kwargs)
+                payload_profile = payload.get("chrome_profile_dir")
+                if payload_profile:
+                    profile_dir, profile_name = str(payload_profile), payload.get("chrome_profile_name")
+                else:
+                    profile_dir, profile_name = self._default_chrome_profile()
+                old_profile = os.environ.get("HERMES_MEET_CHROME_PROFILE_DIR")
+                old_profile_name = os.environ.get("HERMES_MEET_CHROME_PROFILE_NAME")
+                if profile_dir:
+                    os.environ["HERMES_MEET_CHROME_PROFILE_DIR"] = str(profile_dir)
+                    if profile_name:
+                        os.environ["HERMES_MEET_CHROME_PROFILE_NAME"] = str(profile_name)
+                try:
+                    result = pm.start(**kwargs)
+                finally:
+                    if old_profile is None:
+                        os.environ.pop("HERMES_MEET_CHROME_PROFILE_DIR", None)
+                    else:
+                        os.environ["HERMES_MEET_CHROME_PROFILE_DIR"] = old_profile
+                    if old_profile_name is None:
+                        os.environ.pop("HERMES_MEET_CHROME_PROFILE_NAME", None)
+                    else:
+                        os.environ["HERMES_MEET_CHROME_PROFILE_NAME"] = old_profile_name
                 return _proto.make_response(req_id, result)
             if t == "stop":
                 reason_arg = payload.get("reason", "requested")
