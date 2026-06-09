@@ -3569,6 +3569,7 @@ class TelegramAdapter(BasePlatformAdapter):
             )
             return
 
+
         # --- Exec approval callbacks (ea:choice:id) ---
         if data.startswith("ea:"):
             parts = data.split(":", 2)
