@@ -19,6 +19,8 @@ never the child's intermediate tool calls or reasoning.
 import enum
 import json
 import logging
+import re
+import subprocess
 
 logger = logging.getLogger(__name__)
 import os
@@ -318,6 +320,13 @@ def _looks_like_error_output(content: str) -> bool:
     )
 
 
+_ALE_RUN_MARKER_RE = re.compile(r"HERMES-ALE-RUN:\s*(\{.*?\})\s*-->", re.DOTALL)
+_ALE_COMPLETE_SCRIPT = os.environ.get(
+    "HERMES_ALE_COMPLETE_SCRIPT",
+    os.path.expanduser("~/hermes-workspace/Lex-Workspace/scripts/ale-complete.py"),
+)
+
+
 def _normalize_role(r: Optional[str]) -> str:
     """Normalise a caller-provided role to 'leaf' or 'orchestrator'.
 
@@ -333,6 +342,69 @@ def _normalize_role(r: Optional[str]) -> str:
         return r_norm
     logger.warning("Unknown delegate_task role=%r, coercing to 'leaf'", r)
     return "leaf"
+
+
+def _extract_ale_run_id(task: Dict[str, Any], top_level_run_id: Optional[str]) -> Optional[str]:
+    explicit = task.get("ale_run_id") or top_level_run_id
+    if explicit:
+        return str(explicit).strip() or None
+
+    goal = task.get("goal")
+    if not isinstance(goal, str):
+        return None
+    match = _ALE_RUN_MARKER_RE.search(goal)
+    if not match:
+        return None
+    try:
+        payload = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        logger.debug("delegate_task: could not parse HERMES-ALE-RUN marker", exc_info=True)
+        return None
+    run_id = payload.get("run_id") if isinstance(payload, dict) else None
+    return str(run_id).strip() if run_id else None
+
+
+def _ale_completion_status(entry: Dict[str, Any]) -> str:
+    status = str(entry.get("status") or "").lower()
+    exit_reason = str(entry.get("exit_reason") or "").lower()
+    if status == "completed" and exit_reason in {"", "completed"}:
+        return "success"
+    if status in {"timeout", "interrupted"} or exit_reason in {"timeout", "interrupted"}:
+        return "error"
+    if status in {"failed", "failure"} or exit_reason == "max_iterations":
+        return "failure"
+    return "error"
+
+
+def _complete_ale_run_nonblocking(run_id: Optional[str], entry: Dict[str, Any]) -> None:
+    if not run_id:
+        return
+    script = _ALE_COMPLETE_SCRIPT
+    if not script or not os.path.exists(os.path.expanduser(script)):
+        logger.debug("delegate_task: ALE complete script missing for run_id=%s", run_id)
+        return
+    raw_tokens = entry.get("tokens")
+    tokens = raw_tokens if isinstance(raw_tokens, dict) else {}
+    cmd = [
+        "python3",
+        os.path.expanduser(script),
+        "--run-id",
+        run_id,
+        "--status",
+        _ale_completion_status(entry),
+    ]
+    for flag, value in (("--tokens-in", tokens.get("input")), ("--tokens-out", tokens.get("output"))):
+        if isinstance(value, (int, float)):
+            cmd.extend([flag, str(int(value))])
+    try:
+        subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception:
+        logger.debug("delegate_task: ALE completion hook failed for run_id=%s", run_id, exc_info=True)
 
 
 def _get_max_concurrent_children() -> int:
@@ -2084,6 +2156,7 @@ def delegate_task(
 
     overall_start = time.monotonic()
     results = []
+    ale_run_ids = [_extract_ale_run_id(task, ale_run_id) for task in task_list]
 
     n_tasks = len(task_list)
     # Track goal labels for progress display (truncated for readability)
@@ -2112,7 +2185,7 @@ def delegate_task(
             # parent inherit. `_resolve_delegation_credentials` folds the
             # override into the config-based resolution.
             task_model_override = t.get("model") if "model" in t else model
-            task_ale_run_id = t.get("ale_run_id") if "ale_run_id" in t else ale_run_id
+            task_ale_run_id = ale_run_ids[i]
             try:
                 creds = _resolve_delegation_credentials(
                     cfg, parent_agent, override=task_model_override
@@ -2324,6 +2397,9 @@ def delegate_task(
                 _children_cost_total += float(child_cost)
         except (TypeError, ValueError):
             pass
+        _entry_index = entry.get("task_index", -1)
+        if isinstance(_entry_index, int) and 0 <= _entry_index < len(ale_run_ids):
+            _complete_ale_run_nonblocking(ale_run_ids[_entry_index], entry)
         if _invoke_hook is None:
             continue
         try:

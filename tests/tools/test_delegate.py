@@ -11,6 +11,7 @@ Run with:  python -m pytest tests/test_delegate.py -v
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -32,6 +33,9 @@ from tools.delegate_tool import (
     _strip_blocked_tools,
     _resolve_child_credential_pool,
     _resolve_delegation_credentials,
+    _extract_ale_run_id,
+    _ale_completion_status,
+    _complete_ale_run_nonblocking,
 )
 
 
@@ -1930,6 +1934,66 @@ class TestDispatchDelegateTask(unittest.TestCase):
             _, kwargs = mock_build.call_args
             self.assertEqual(kwargs["override_acp_command"], "claude")
             self.assertEqual(kwargs["override_acp_args"], ["--acp", "--stdio"])
+
+class TestAleRunCompletion(unittest.TestCase):
+    def test_extracts_explicit_and_marker_ale_run_ids(self):
+        marker = '<!-- HERMES-ALE-RUN: {"run_id":"run_marker","agent":"reid"} -->'
+        self.assertEqual(_extract_ale_run_id({"goal": "task", "ale_run_id": "run_explicit"}, None), "run_explicit")
+        self.assertEqual(_extract_ale_run_id({"goal": f"do work\n{marker}"}, None), "run_marker")
+        self.assertEqual(_extract_ale_run_id({"goal": "do work"}, "run_top"), "run_top")
+
+    def test_completion_status_inference(self):
+        self.assertEqual(_ale_completion_status({"status": "completed", "exit_reason": "completed"}), "success")
+        self.assertEqual(_ale_completion_status({"status": "completed", "exit_reason": "max_iterations"}), "failure")
+        self.assertEqual(_ale_completion_status({"status": "timeout", "exit_reason": "timeout"}), "error")
+        self.assertEqual(_ale_completion_status({"status": "error"}), "error")
+
+    @patch("tools.delegate_tool.subprocess.Popen")
+    @patch("tools.delegate_tool.os.path.exists", return_value=True)
+    def test_completion_hook_spawns_ale_complete_without_waiting(self, _mock_exists, mock_popen):
+        _complete_ale_run_nonblocking(
+            "run_smoke",
+            {"status": "completed", "exit_reason": "completed", "tokens": {"input": 12, "output": 34}},
+        )
+        args, kwargs = mock_popen.call_args
+        cmd = args[0]
+        self.assertIn("--run-id", cmd)
+        self.assertIn("run_smoke", cmd)
+        self.assertIn("--status", cmd)
+        self.assertIn("success", cmd)
+        self.assertEqual(kwargs["stdout"], subprocess.DEVNULL)
+        self.assertEqual(kwargs["stderr"], subprocess.DEVNULL)
+        self.assertTrue(kwargs["start_new_session"])
+
+    @patch("tools.delegate_tool._complete_ale_run_nonblocking")
+    @patch("tools.delegate_tool._load_config", return_value={})
+    @patch("tools.delegate_tool._resolve_delegation_credentials")
+    @patch("tools.delegate_tool._build_child_agent")
+    def test_delegate_task_completes_marker_run_id(self, mock_build, mock_creds, _mock_cfg, mock_complete):
+        mock_creds.return_value = {
+            "provider": None, "base_url": None,
+            "api_key": None, "api_mode": None, "model": None,
+        }
+        mock_child = MagicMock()
+        mock_child.run_conversation.return_value = {
+            "final_response": "done", "completed": True,
+            "api_calls": 1, "messages": [],
+        }
+        mock_child._delegate_saved_tool_names = []
+        mock_child._credential_pool = None
+        mock_child.session_prompt_tokens = 1
+        mock_child.session_completion_tokens = 2
+        mock_child.model = "test"
+        mock_build.return_value = mock_child
+        marker = '<!-- HERMES-ALE-RUN: {"run_id":"run_integrated","agent":"reid"} -->'
+
+        result = json.loads(delegate_task(goal=f"do work\n{marker}", parent_agent=_make_mock_parent()))
+
+        self.assertEqual(result["results"][0]["status"], "completed")
+        mock_complete.assert_called_once()
+        self.assertEqual(mock_complete.call_args.args[0], "run_integrated")
+        self.assertEqual(mock_complete.call_args.args[1]["exit_reason"], "completed")
+
 
 class TestDelegateEventEnum(unittest.TestCase):
     """Tests for DelegateEvent enum and back-compat aliases."""
