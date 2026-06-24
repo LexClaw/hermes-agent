@@ -31,6 +31,7 @@ from tools.delegate_tool import (
     _strip_blocked_tools,
     _resolve_child_credential_pool,
     _resolve_delegation_credentials,
+    _looks_like_error_output,
 )
 
 
@@ -58,6 +59,15 @@ def _make_mock_parent(depth=0):
 
 
 class TestDelegateRequirements(unittest.TestCase):
+    def test_looks_like_error_output_handles_list_content_blocks(self):
+        """Non-string provider content must not crash delegation cleanup."""
+        content = [{"type": "text", "text": "normal child response"}]
+        self.assertFalse(_looks_like_error_output(content))
+
+    def test_looks_like_error_output_handles_list_error_payload(self):
+        content = [{"status": "error", "message": "child failed"}]
+        self.assertFalse(_looks_like_error_output(content))
+
     def test_always_available(self):
         self.assertTrue(check_delegate_requirements())
 

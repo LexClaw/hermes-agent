@@ -285,7 +285,7 @@ def _extract_output_tail(
     return tail
 
 
-def _looks_like_error_output(content: str) -> bool:
+def _looks_like_error_output(content: Any) -> bool:
     """Conservative stderr/error detector for tool-result previews.
 
     The old heuristic flagged any preview containing the substring "error",
@@ -294,9 +294,19 @@ def _looks_like_error_output(content: str) -> bool:
       - structured JSON with an ``error`` key
       - structured JSON with ``status`` of error/failed
       - first line starts with a classic error marker
+
+    Provider adapters may return multimodal/list-shaped message content
+    (for example Codex Responses content blocks).  Tool preview/error
+    detection must never crash delegation just because the child response
+    is not a plain string.
     """
     if not content:
         return False
+    if not isinstance(content, str):
+        try:
+            content = json.dumps(content)
+        except TypeError:
+            content = str(content)
 
     head = content.lstrip()
     if head.startswith("{") or head.startswith("["):
