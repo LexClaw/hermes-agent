@@ -42,6 +42,7 @@ import uuid
 
 _IS_WINDOWS = platform.system() == "Windows"
 from tools.environments.local import _find_shell, _resolve_safe_cwd, _sanitize_subprocess_env
+from hermes_cli import _subprocess_compat
 from hermes_cli._subprocess_compat import windows_hide_flags
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -569,12 +570,11 @@ class ProcessRegistry:
             return
         if _IS_WINDOWS:
             try:
-                subprocess.run(
+                _subprocess_compat.run(
                     ["taskkill", "/PID", str(pid), "/T", "/F"],
                     capture_output=True,
                     text=True,
                     timeout=10,
-                    creationflags=windows_hide_flags(),
                     stdin=subprocess.DEVNULL,
                 )
             except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
@@ -750,7 +750,7 @@ class ProcessRegistry:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            preexec_fn=None if _IS_WINDOWS else os.setsid,
+            start_new_session=True,
             **_popen_kwargs,
         )
 
@@ -1580,6 +1580,23 @@ class ProcessRegistry:
                 s.session_key == session_key and not s.exited
                 for s in self._running.values()
             )
+
+    def has_any_active(self) -> bool:
+        """Whether ANY background process is still running (across all sessions).
+
+        Used by scale-to-zero idle detection (gateway/scale_to_zero): a gateway
+        with a live background process (terminal background=true) is NOT idle and
+        must not be suspended, or the process is lost. Refreshes detached
+        sessions first so a finished-but-unreaped process reads as inactive.
+        """
+        with self._lock:
+            sessions = list(self._running.values())
+
+        for session in sessions:
+            self._refresh_detached_session(session)
+
+        with self._lock:
+            return any(not s.exited for s in self._running.values())
 
     def kill_all(self, task_id: str = None) -> int:
         """Kill all running processes, optionally filtered by task_id. Returns count killed."""

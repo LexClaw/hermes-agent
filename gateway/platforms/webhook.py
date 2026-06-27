@@ -54,6 +54,7 @@ from gateway.platforms.base import (
     MessageType,
     SendResult,
 )
+from hermes_cli import _subprocess_compat
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ class WebhookAdapter(BasePlatformAdapter):
     # Lifecycle
     # ------------------------------------------------------------------
 
-    async def connect(self) -> bool:
+    async def connect(self, *, is_reconnect: bool = False) -> bool:
         # Load agent-created subscriptions before validating
         self._reload_dynamic_routes()
 
@@ -972,7 +973,7 @@ class WebhookAdapter(BasePlatformAdapter):
             )
 
         try:
-            result = subprocess.run(
+            result = _subprocess_compat.run(
                 [
                     "gh",
                     "pr",
