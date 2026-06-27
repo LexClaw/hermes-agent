@@ -1,0 +1,916 @@
+{
+  "version": 1,
+  "owner": "Lex / Hit Network",
+  "generated_at": "2026-06-27",
+  "base": "71c0644408c7a3dbd65f444c3117285c39c974a2",
+  "upstream_ref": "upstream/main",
+  "upstream_sha": "2ecca1e7d3e7c387b4d350f99dc699e2f43f73c5",
+  "ahead_commits": [
+    "7746a4598 google_meet: detect stale storage_state at navigate, fail-fast with auth_stale leaveReason",
+    "6b8b55b5b fix(google_meet): add stealth shim to defeat Meet anti-bot fingerprint",
+    "0ec35526b meet-bot: warm meet.google.com before storage_state capture + setup preflight (kn7c0c9c)",
+    "803491de1 SIE AC#8: consolidate skill-usage telemetry into insights.py (closes umbrella)",
+    "a79341685 feat: route delegated agents through resolver",
+    "3687c2c56 feat(curator): graduation-candidate detector (kn79130 Stage 1)",
+    "18d6bc80b fix(webhook): grant re-review regex bound + tests + replay harness",
+    "904f31ea9 fix(webhook): strip prior grant-verdict markers + inject fresh-audit instruction",
+    "80a10d289 feat(hooks): gbrain hook drift-detector v1 (validates VALID_HOOKS event names + config schema, loud-alarms on drift)",
+    "68d773069 Phase 3: Hit Network fork documentation augment (#1)",
+    "9717bdcbe fix(cron): reapply ALE and SIE scheduler guards",
+    "0e8cf78fc feat(telegram): restore SIE and meet callbacks",
+    "c53e567fd feat(delegate): preserve ALE run telemetry wiring",
+    "fdedb1390 feat(gateway): inject hook runtime context",
+    "ac4630367 fix: restore webhook approval gate on upgraded base",
+    "b4c0e8de2 feat: Add resolver_routed skill configuration (Path A Phase 1)",
+    "58b1b228f fix(anthropic): validate model id in normalize_model_for_provider anthropic branch (card kn7b995np6yzda)",
+    "f389f6c24 fix(delegate): forward model + ale_run_id through _dispatch_delegate_task",
+    "5d345c013 feat(meet): remote-node real-Chrome profile mode to bypass headless anti-bot (kn7c0c9c, partial \u2014 live test pending)",
+    "e6233c040 merge: upstream v2026.6.5 into Hit Network fork (435 commits)",
+    "8010fa879 feat(skills): external scanner hook for skill-install gate",
+    "ac38fef57 feat(skills): route agent-created guard through external scanner",
+    "3a3047efe feat(skills): route agent-created guard through external scanner",
+    "d062a43f7 feat(ale): wire skill_view() telemetry to ALE skill_code",
+    "7748900a7 fix(cron): reapply SIE Phase 5 Part B per-job exception isolation on v2026.5.16",
+    "9e3ea4ccc feat(google-meet): forward-port meet summons and Cartesia sustain",
+    "73807b399 refactor(skills): upgrade 12 skill descriptions to gstack quality",
+    "8747ccff7 chore(fork): working-tree hygiene + gitignore stray paths",
+    "b0c1346fa fix: tolerate non-string delegate output previews",
+    "0138e5aae reconcile hermes v0.17 phase 3 prompt config meet docs",
+    "71c064440 merge upstream post-v017 chronos docs"
+  ],
+  "rationale": "Survival list for Hit Network local customizations across the Hermes MoA upstream reconciliation. Generated before merging upstream/main in isolated worktree.",
+  "entries": [
+    {
+      "path": ".github/actions/hermes-smoke-test/action.yml",
+      "kind": "new-file",
+      "source_commit": "71c0644408c7",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": ".github/workflows/docker-publish.yml",
+      "kind": "new-file",
+      "source_commit": "0138e5aae1b4",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": ".gitignore",
+      "kind": "modified-upstream-file",
+      "source_commit": "8747ccff7502",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "hand-merge",
+      "check": "path-exists"
+    },
+    {
+      "path": "agent/anthropic_adapter.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "58b1b228f7ac",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "hand-merge",
+      "check": "path-exists"
+    },
+    {
+      "path": "agent/curator.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "3687c2c567a7",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:curator"
+    },
+    {
+      "path": "agent/insights.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "803491de1887",
+      "rationale": "ALE telemetry and skill-usage instrumentation owned by Hit Network observability.",
+      "reapply": "hand-merge",
+      "check": "grep:skill_usage"
+    },
+    {
+      "path": "agent/prompt_builder.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Delegation/model override and prompt-builder contract owned by Hit Network dispatch workflow.",
+      "reapply": "hand-merge",
+      "check": "grep:model"
+    },
+    {
+      "path": "agent/skill_utils.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:scanner"
+    },
+    {
+      "path": "apps/desktop/electron/git-worktrees.cjs",
+      "kind": "new-file",
+      "source_commit": "0138e5aae1b4",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "apps/desktop/src/app/chat/sidebar/workspace-groups.test.ts",
+      "kind": "new-file",
+      "source_commit": "0138e5aae1b4",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "apps/desktop/src/app/chat/sidebar/workspace-groups.ts",
+      "kind": "new-file",
+      "source_commit": "0138e5aae1b4",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "apps/desktop/src/hooks/use-worktree-info.ts",
+      "kind": "new-file",
+      "source_commit": "0138e5aae1b4",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "cron/jobs.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "9717bdcbea85",
+      "rationale": "Scheduler/SIE guard customization owned by Hit Network cron reliability.",
+      "reapply": "hand-merge",
+      "check": "grep:SIE"
+    },
+    {
+      "path": "cron/scheduler.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "9717bdcbea85",
+      "rationale": "Scheduler/SIE guard customization owned by Hit Network cron reliability.",
+      "reapply": "hand-merge",
+      "check": "grep:SIE"
+    },
+    {
+      "path": "docs/hit-network/README.md",
+      "kind": "new-file",
+      "source_commit": "68d773069677",
+      "rationale": "Hit Network fork-local documentation and planning artifacts.",
+      "reapply": "checkout-subtree",
+      "check": "grep:Hit Network"
+    },
+    {
+      "path": "docs/hit-network/architecture.md",
+      "kind": "new-file",
+      "source_commit": "68d773069677",
+      "rationale": "Hit Network fork-local documentation and planning artifacts.",
+      "reapply": "checkout-subtree",
+      "check": "grep:Hit Network"
+    },
+    {
+      "path": "docs/hit-network/cron-conventions.md",
+      "kind": "new-file",
+      "source_commit": "68d773069677",
+      "rationale": "Scheduler/SIE guard customization owned by Hit Network cron reliability.",
+      "reapply": "checkout-subtree",
+      "check": "grep:SIE"
+    },
+    {
+      "path": "docs/hit-network/fork-policy.md",
+      "kind": "new-file",
+      "source_commit": "68d773069677",
+      "rationale": "Hit Network fork-local documentation and planning artifacts.",
+      "reapply": "checkout-subtree",
+      "check": "grep:Hit Network"
+    },
+    {
+      "path": "docs/hit-network/prompt-builder-integration.md",
+      "kind": "new-file",
+      "source_commit": "68d773069677",
+      "rationale": "Hit Network fork-local documentation and planning artifacts.",
+      "reapply": "checkout-subtree",
+      "check": "grep:Lex"
+    },
+    {
+      "path": "docs/hit-network/skills-loading.md",
+      "kind": "new-file",
+      "source_commit": "68d773069677",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "checkout-subtree",
+      "check": "grep:skill"
+    },
+    {
+      "path": "gateway/platforms/webhook.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "18d6bc80bbec",
+      "rationale": "Webhook approval gate and review surfaces owned by Hit Network workflow safety.",
+      "reapply": "hand-merge",
+      "check": "grep:webhook"
+    },
+    {
+      "path": "gateway/run.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "fdedb1390f84",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "hand-merge",
+      "check": "grep:webhook"
+    },
+    {
+      "path": "hermes_cli/config.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "8010fa879848",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "hand-merge",
+      "check": "grep:webhook"
+    },
+    {
+      "path": "hermes_cli/model_normalize.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "58b1b228f7ac",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "hand-merge",
+      "check": "path-exists"
+    },
+    {
+      "path": "hermes_cli/skills_config.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:skill"
+    },
+    {
+      "path": "hermes_cli/skills_hub.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "8010fa879848",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:scanner"
+    },
+    {
+      "path": "llms.txt",
+      "kind": "new-file",
+      "source_commit": "68d773069677",
+      "rationale": "Hit Network fork-local documentation and planning artifacts.",
+      "reapply": "checkout-subtree",
+      "check": "grep:Hit Network"
+    },
+    {
+      "path": "optional-skills/devops/hermes-s6-container-supervision/SKILL.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "73807b39970b",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:skill"
+    },
+    {
+      "path": "optional-skills/mlops/obliteratus/SKILL.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "0138e5aae1b4",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:skill"
+    },
+    {
+      "path": "plugins/google_meet/SKILL.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "9e3ea4ccc524",
+      "rationale": "Google Meet callback/summons and realtime voice surfaces owned by Hit Network meeting automation.",
+      "reapply": "hand-merge",
+      "check": "grep:google_meet"
+    },
+    {
+      "path": "plugins/google_meet/cli.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "0ec35526b419",
+      "rationale": "Google Meet callback/summons and realtime voice surfaces owned by Hit Network meeting automation.",
+      "reapply": "hand-merge",
+      "check": "grep:google_meet"
+    },
+    {
+      "path": "plugins/google_meet/meet_bot.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "7746a459811b",
+      "rationale": "Google Meet callback/summons and realtime voice surfaces owned by Hit Network meeting automation.",
+      "reapply": "hand-merge",
+      "check": "grep:google_meet"
+    },
+    {
+      "path": "plugins/google_meet/node/server.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "5d345c0136a0",
+      "rationale": "Google Meet callback/summons and realtime voice surfaces owned by Hit Network meeting automation.",
+      "reapply": "hand-merge",
+      "check": "grep:google_meet"
+    },
+    {
+      "path": "plugins/google_meet/process_manager.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "5d345c0136a0",
+      "rationale": "Google Meet callback/summons and realtime voice surfaces owned by Hit Network meeting automation.",
+      "reapply": "hand-merge",
+      "check": "grep:google_meet"
+    },
+    {
+      "path": "plugins/google_meet/realtime/__init__.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "9e3ea4ccc524",
+      "rationale": "Google Meet callback/summons and realtime voice surfaces owned by Hit Network meeting automation.",
+      "reapply": "hand-merge",
+      "check": "grep:google_meet"
+    },
+    {
+      "path": "plugins/google_meet/realtime/cartesia_client.py",
+      "kind": "new-file",
+      "source_commit": "9e3ea4ccc524",
+      "rationale": "Google Meet callback/summons and realtime voice surfaces owned by Hit Network meeting automation.",
+      "reapply": "checkout-subtree",
+      "check": "grep:Cartesia"
+    },
+    {
+      "path": "plugins/google_meet/summons.py",
+      "kind": "new-file",
+      "source_commit": "9e3ea4ccc524",
+      "rationale": "Google Meet callback/summons and realtime voice surfaces owned by Hit Network meeting automation.",
+      "reapply": "checkout-subtree",
+      "check": "grep:summons"
+    },
+    {
+      "path": "plugins/google_meet/tests/__init__.py",
+      "kind": "new-file",
+      "source_commit": "9e3ea4ccc524",
+      "rationale": "Google Meet callback/summons and realtime voice surfaces owned by Hit Network meeting automation.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "plugins/google_meet/tests/test_summons.py",
+      "kind": "new-file",
+      "source_commit": "9e3ea4ccc524",
+      "rationale": "Google Meet callback/summons and realtime voice surfaces owned by Hit Network meeting automation.",
+      "reapply": "checkout-subtree",
+      "check": "grep:google_meet"
+    },
+    {
+      "path": "plugins/platforms/telegram/adapter.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "0138e5aae1b4",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "hand-merge",
+      "check": "grep:Lex"
+    },
+    {
+      "path": "run_agent.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "f389f6c24818",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "hand-merge",
+      "check": "grep:model"
+    },
+    {
+      "path": "scripts/gbrain_hook_drift_detector.py",
+      "kind": "new-file",
+      "source_commit": "80a10d2895e9",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "scripts/replay_grant_prompt_notes.py",
+      "kind": "new-file",
+      "source_commit": "18d6bc80bbec",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "grep:Lex"
+    },
+    {
+      "path": "skills/mlops/evaluation/lm-evaluation-harness/SKILL.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "73807b39970b",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "path-exists"
+    },
+    {
+      "path": "skills/mlops/evaluation/weights-and-biases/SKILL.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "73807b39970b",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "path-exists"
+    },
+    {
+      "path": "skills/mlops/inference/llama-cpp/SKILL.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "73807b39970b",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:skill"
+    },
+    {
+      "path": "skills/mlops/inference/vllm/SKILL.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "73807b39970b",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "path-exists"
+    },
+    {
+      "path": "skills/mlops/models/audiocraft/SKILL.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "73807b39970b",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "path-exists"
+    },
+    {
+      "path": "skills/mlops/models/segment-anything/SKILL.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "73807b39970b",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:guard"
+    },
+    {
+      "path": "skills/software-development/hermes-agent-skill-authoring/SKILL.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "73807b39970b",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:skill"
+    },
+    {
+      "path": "skills/software-development/plan/SKILL.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "73807b39970b",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:skill"
+    },
+    {
+      "path": "skills/software-development/systematic-debugging/SKILL.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "73807b39970b",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:skill"
+    },
+    {
+      "path": "skills/software-development/test-driven-development/SKILL.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "73807b39970b",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:skill"
+    },
+    {
+      "path": "tasks/plans/MASTER-addition-by-subtraction-plan.md",
+      "kind": "new-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Hit Network fork-local documentation and planning artifacts.",
+      "reapply": "checkout-subtree",
+      "check": "grep:Hit Network"
+    },
+    {
+      "path": "tasks/plans/addition-by-subtraction-grant-arm.md",
+      "kind": "new-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Hit Network fork-local documentation and planning artifacts.",
+      "reapply": "checkout-subtree",
+      "check": "grep:Hit Network"
+    },
+    {
+      "path": "tasks/plans/addition-by-subtraction-grant-gpt55-arm.md",
+      "kind": "new-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Hit Network fork-local documentation and planning artifacts.",
+      "reapply": "checkout-subtree",
+      "check": "grep:Hit Network"
+    },
+    {
+      "path": "tasks/plans/addition-by-subtraction-lex-arm.md",
+      "kind": "new-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Hit Network fork-local documentation and planning artifacts.",
+      "reapply": "checkout-subtree",
+      "check": "grep:Hit Network"
+    },
+    {
+      "path": "tasks/plans/debate-elegance-position.md",
+      "kind": "new-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Hit Network fork-local documentation and planning artifacts.",
+      "reapply": "checkout-subtree",
+      "check": "grep:Hit Network"
+    },
+    {
+      "path": "tasks/plans/debate-safety-position.md",
+      "kind": "new-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Hit Network fork-local documentation and planning artifacts.",
+      "reapply": "checkout-subtree",
+      "check": "grep:Hit Network"
+    },
+    {
+      "path": "tasks/plans/fix-mc-crashloop-alert.md",
+      "kind": "new-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "ALE telemetry and skill-usage instrumentation owned by Hit Network observability.",
+      "reapply": "checkout-subtree",
+      "check": "grep:ale"
+    },
+    {
+      "path": "tasks/plans/fix-task-index-sync.md",
+      "kind": "new-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Hit Network fork-local documentation and planning artifacts.",
+      "reapply": "checkout-subtree",
+      "check": "grep:Lex"
+    },
+    {
+      "path": "tasks/plans/scheduler-audit-arm-a-jobsjson.md",
+      "kind": "new-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Scheduler/SIE guard customization owned by Hit Network cron reliability.",
+      "reapply": "checkout-subtree",
+      "check": "grep:SIE"
+    },
+    {
+      "path": "tasks/plans/scheduler-audit-arm-b-shadow.md",
+      "kind": "new-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Scheduler/SIE guard customization owned by Hit Network cron reliability.",
+      "reapply": "checkout-subtree",
+      "check": "grep:exception"
+    },
+    {
+      "path": "tasks/plans/scheduler-audit-arm-c-convex-pillars.md",
+      "kind": "new-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Scheduler/SIE guard customization owned by Hit Network cron reliability.",
+      "reapply": "checkout-subtree",
+      "check": "grep:SIE"
+    },
+    {
+      "path": "tests/agent/test_anthropic_model_resolve.py",
+      "kind": "new-file",
+      "source_commit": "58b1b228f7ac",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tests/agent/test_curator_graduation.py",
+      "kind": "new-file",
+      "source_commit": "3687c2c567a7",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "checkout-subtree",
+      "check": "grep:curator"
+    },
+    {
+      "path": "tests/agent/test_insights_skill_usage.py",
+      "kind": "new-file",
+      "source_commit": "803491de1887",
+      "rationale": "ALE telemetry and skill-usage instrumentation owned by Hit Network observability.",
+      "reapply": "checkout-subtree",
+      "check": "grep:skill"
+    },
+    {
+      "path": "tests/agent/test_prompt_builder.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Delegation/model override and prompt-builder contract owned by Hit Network dispatch workflow.",
+      "reapply": "hand-merge",
+      "check": "grep:model"
+    },
+    {
+      "path": "tests/gateway/test_webhook_dynamic_routes.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "18d6bc80bbec",
+      "rationale": "Webhook approval gate and review surfaces owned by Hit Network workflow safety.",
+      "reapply": "hand-merge",
+      "check": "grep:webhook"
+    },
+    {
+      "path": "tests/hermes_cli/test_skills_hub.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "8010fa879848",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:scanner"
+    },
+    {
+      "path": "tests/plugins/test_google_meet_cartesia_sustain.py",
+      "kind": "new-file",
+      "source_commit": "9e3ea4ccc524",
+      "rationale": "Google Meet callback/summons and realtime voice surfaces owned by Hit Network meeting automation.",
+      "reapply": "checkout-subtree",
+      "check": "grep:google_meet"
+    },
+    {
+      "path": "tests/test_docker_home_override_scripts.py",
+      "kind": "new-file",
+      "source_commit": "0138e5aae1b4",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tests/test_docker_stage2_browser_discovery.py",
+      "kind": "new-file",
+      "source_commit": "71c0644408c7",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tests/test_docker_webui_install_surface.py",
+      "kind": "new-file",
+      "source_commit": "0138e5aae1b4",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tests/test_dockerfile_tini_compat_shim.py",
+      "kind": "new-file",
+      "source_commit": "71c0644408c7",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tests/tools/test_approval.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "ac463036724a",
+      "rationale": "Webhook approval gate and review surfaces owned by Hit Network workflow safety.",
+      "reapply": "hand-merge",
+      "check": "grep:webhook"
+    },
+    {
+      "path": "tests/tools/test_delegate.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "a7934168576f",
+      "rationale": "Delegation/model override and prompt-builder contract owned by Hit Network dispatch workflow.",
+      "reapply": "hand-merge",
+      "check": "grep:ale_run_id"
+    },
+    {
+      "path": "tests/tools/test_mcp_cua_driver_preflight.py",
+      "kind": "new-file",
+      "source_commit": "68d773069677",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tests/tools/test_mixture_of_agents_tool.py",
+      "kind": "new-file",
+      "source_commit": "71c0644408c7",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tests/tools/test_skill_manager_tool.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "ac38fef57679",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:scanner"
+    },
+    {
+      "path": "tests/tools/test_skills_tool.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:skill"
+    },
+    {
+      "path": "tests/tools/test_stage2_hook_gateway_bootstrap_state.py",
+      "kind": "new-file",
+      "source_commit": "71c0644408c7",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tests/tools/test_stage2_hook_immutable_install.py",
+      "kind": "new-file",
+      "source_commit": "0138e5aae1b4",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tests/tools/test_stage2_hook_install_method_stamp.py",
+      "kind": "new-file",
+      "source_commit": "0138e5aae1b4",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tests/tools/test_stage2_hook_log_dir_seed.py",
+      "kind": "new-file",
+      "source_commit": "0138e5aae1b4",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tests/tools/test_stage2_hook_puid_pgid.py",
+      "kind": "new-file",
+      "source_commit": "71c0644408c7",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tests/tools/test_stage2_hook_toplevel_chown.py",
+      "kind": "new-file",
+      "source_commit": "71c0644408c7",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tests/tools/test_stage2_hook_unraid_uid.py",
+      "kind": "new-file",
+      "source_commit": "71c0644408c7",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tests/tools/test_stage2_hook_user_flag_guard.py",
+      "kind": "new-file",
+      "source_commit": "71c0644408c7",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tools/approval.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "ac463036724a",
+      "rationale": "Webhook approval gate and review surfaces owned by Hit Network workflow safety.",
+      "reapply": "hand-merge",
+      "check": "grep:webhook"
+    },
+    {
+      "path": "tools/delegate_tool.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "a7934168576f",
+      "rationale": "Delegation/model override and prompt-builder contract owned by Hit Network dispatch workflow.",
+      "reapply": "hand-merge",
+      "check": "grep:ale_run_id"
+    },
+    {
+      "path": "tools/hit_network_ale_skill_telemetry.py",
+      "kind": "new-file",
+      "source_commit": "d062a43f7a3e",
+      "rationale": "ALE telemetry and skill-usage instrumentation owned by Hit Network observability.",
+      "reapply": "checkout-subtree",
+      "check": "grep:skill"
+    },
+    {
+      "path": "tools/mcp_tool.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "68d773069677",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "hand-merge",
+      "check": "path-exists"
+    },
+    {
+      "path": "tools/mixture_of_agents_tool.py",
+      "kind": "new-file",
+      "source_commit": "71c0644408c7",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "checkout-subtree",
+      "check": "path-exists"
+    },
+    {
+      "path": "tools/skill_manager_tool.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "ac38fef57679",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:scanner"
+    },
+    {
+      "path": "tools/skills_guard.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "8010fa879848",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:scanner"
+    },
+    {
+      "path": "tools/skills_tool.py",
+      "kind": "modified-upstream-file",
+      "source_commit": "d062a43f7a3e",
+      "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
+      "reapply": "hand-merge",
+      "check": "grep:curator"
+    },
+    {
+      "path": "website/docs/user-guide/configuration.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "3a3047efe16e",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "hand-merge",
+      "check": "path-exists"
+    },
+    {
+      "path": "website/i18n/zh-Hans/docusaurus-plugin-content-docs/current/user-guide/configuration.md",
+      "kind": "modified-upstream-file",
+      "source_commit": "3a3047efe16e",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
+      "reapply": "hand-merge",
+      "check": "path-exists"
+    },
+    {
+      "path": "apps/desktop/src/app/chat/sidebar/",
+      "kind": "new-directory",
+      "source_commit": "0138e5aae1b4",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan. Directory-level entry generated because multiple fork-only files live below this prefix.",
+      "reapply": "checkout-subtree",
+      "check": "directory-exists"
+    },
+    {
+      "path": "docs/hit-network/",
+      "kind": "new-directory",
+      "source_commit": "68d773069677",
+      "rationale": "Hit Network fork-local documentation and planning artifacts. Directory-level entry generated because multiple fork-only files live below this prefix.",
+      "reapply": "checkout-subtree",
+      "check": "directory-exists"
+    },
+    {
+      "path": "plugins/google_meet/",
+      "kind": "new-directory",
+      "source_commit": "9e3ea4ccc524",
+      "rationale": "Google Meet callback/summons and realtime voice surfaces owned by Hit Network meeting automation. Directory-level entry generated because multiple fork-only files live below this prefix.",
+      "reapply": "checkout-subtree",
+      "check": "directory-exists"
+    },
+    {
+      "path": "plugins/google_meet/tests/",
+      "kind": "new-directory",
+      "source_commit": "9e3ea4ccc524",
+      "rationale": "Google Meet callback/summons and realtime voice surfaces owned by Hit Network meeting automation. Directory-level entry generated because multiple fork-only files live below this prefix.",
+      "reapply": "checkout-subtree",
+      "check": "directory-exists"
+    },
+    {
+      "path": "scripts/",
+      "kind": "new-directory",
+      "source_commit": "80a10d2895e9",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan. Directory-level entry generated because multiple fork-only files live below this prefix.",
+      "reapply": "checkout-subtree",
+      "check": "directory-exists"
+    },
+    {
+      "path": "tasks/plans/",
+      "kind": "new-directory",
+      "source_commit": "b4c0e8de2e47",
+      "rationale": "Hit Network fork-local documentation and planning artifacts. Directory-level entry generated because multiple fork-only files live below this prefix.",
+      "reapply": "checkout-subtree",
+      "check": "directory-exists"
+    },
+    {
+      "path": "tests/",
+      "kind": "new-directory",
+      "source_commit": "58b1b228f7ac",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan. Directory-level entry generated because multiple fork-only files live below this prefix.",
+      "reapply": "checkout-subtree",
+      "check": "directory-exists"
+    },
+    {
+      "path": "tests/agent/",
+      "kind": "new-directory",
+      "source_commit": "58b1b228f7ac",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan. Directory-level entry generated because multiple fork-only files live below this prefix.",
+      "reapply": "checkout-subtree",
+      "check": "directory-exists"
+    },
+    {
+      "path": "tests/tools/",
+      "kind": "new-directory",
+      "source_commit": "68d773069677",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan. Directory-level entry generated because multiple fork-only files live below this prefix.",
+      "reapply": "checkout-subtree",
+      "check": "directory-exists"
+    },
+    {
+      "path": "tools/",
+      "kind": "new-directory",
+      "source_commit": "d062a43f7a3e",
+      "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan. Directory-level entry generated because multiple fork-only files live below this prefix.",
+      "reapply": "checkout-subtree",
+      "check": "directory-exists"
+    }
+  ]
+}
