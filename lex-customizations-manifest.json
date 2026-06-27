@@ -78,7 +78,7 @@
       "source_commit": "3687c2c567a7",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:curator"
+      "check": "grep:Graduation-candidate detector"
     },
     {
       "path": "agent/insights.py",
@@ -94,7 +94,7 @@
       "source_commit": "b4c0e8de2e47",
       "rationale": "Delegation/model override and prompt-builder contract owned by Hit Network dispatch workflow.",
       "reapply": "hand-merge",
-      "check": "grep:model"
+      "check": "grep:resolver_routed"
     },
     {
       "path": "agent/skill_utils.py",
@@ -102,7 +102,7 @@
       "source_commit": "b4c0e8de2e47",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:scanner"
+      "check": "grep:get_resolver_routed_skill_names"
     },
     {
       "path": "apps/desktop/electron/git-worktrees.cjs",
@@ -190,7 +190,7 @@
       "source_commit": "68d773069677",
       "rationale": "Hit Network fork-local documentation and planning artifacts.",
       "reapply": "checkout-subtree",
-      "check": "grep:Lex"
+      "check": "grep:HERMES-MODEL"
     },
     {
       "path": "docs/hit-network/skills-loading.md",
@@ -198,7 +198,7 @@
       "source_commit": "68d773069677",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "checkout-subtree",
-      "check": "grep:skill"
+      "check": "grep:scan_skill_commands"
     },
     {
       "path": "gateway/platforms/webhook.py",
@@ -238,7 +238,7 @@
       "source_commit": "b4c0e8de2e47",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:skill"
+      "check": "grep:save_resolver_routed_skills"
     },
     {
       "path": "hermes_cli/skills_hub.py",
@@ -246,7 +246,7 @@
       "source_commit": "8010fa879848",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:scanner"
+      "check": "grep:scan_skill_with_external_scanner"
     },
     {
       "path": "llms.txt",
@@ -262,7 +262,7 @@
       "source_commit": "73807b39970b",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:skill"
+      "check": "grep:hermes-s6-container-supervision"
     },
     {
       "path": "optional-skills/mlops/obliteratus/SKILL.md",
@@ -270,7 +270,7 @@
       "source_commit": "0138e5aae1b4",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:skill"
+      "check": "grep:obliteratus"
     },
     {
       "path": "plugins/google_meet/SKILL.md",
@@ -358,7 +358,7 @@
       "source_commit": "0138e5aae1b4",
       "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
       "reapply": "hand-merge",
-      "check": "grep:Lex"
+      "check": "grep:SIE"
     },
     {
       "path": "run_agent.py",
@@ -366,7 +366,7 @@
       "source_commit": "f389f6c24818",
       "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
       "reapply": "hand-merge",
-      "check": "grep:model"
+      "check": "grep:ale_run_id"
     },
     {
       "path": "scripts/gbrain_hook_drift_detector.py",
@@ -382,7 +382,7 @@
       "source_commit": "18d6bc80bbec",
       "rationale": "Hit Network fork-local customization discovered from the 31 ahead-of-upstream commits or tree-level fork-only scan.",
       "reapply": "checkout-subtree",
-      "check": "grep:Lex"
+      "check": "grep:grant-verdict"
     },
     {
       "path": "skills/mlops/evaluation/lm-evaluation-harness/SKILL.md",
@@ -406,7 +406,7 @@
       "source_commit": "73807b39970b",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:skill"
+      "check": "grep:llama.cpp"
     },
     {
       "path": "skills/mlops/inference/vllm/SKILL.md",
@@ -430,7 +430,7 @@
       "source_commit": "73807b39970b",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:guard"
+      "check": "grep:segment-anything"
     },
     {
       "path": "skills/software-development/hermes-agent-skill-authoring/SKILL.md",
@@ -438,7 +438,7 @@
       "source_commit": "73807b39970b",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:skill"
+      "check": "grep:hermes-agent"
     },
     {
       "path": "skills/software-development/plan/SKILL.md",
@@ -446,7 +446,7 @@
       "source_commit": "73807b39970b",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:skill"
+      "check": "grep:Plan mode"
     },
     {
       "path": "skills/software-development/systematic-debugging/SKILL.md",
@@ -454,7 +454,7 @@
       "source_commit": "73807b39970b",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:skill"
+      "check": "grep:systematic"
     },
     {
       "path": "skills/software-development/test-driven-development/SKILL.md",
@@ -462,7 +462,7 @@
       "source_commit": "73807b39970b",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:skill"
+      "check": "grep:RED-GREEN-REFACTOR"
     },
     {
       "path": "tasks/plans/MASTER-addition-by-subtraction-plan.md",
@@ -518,7 +518,7 @@
       "source_commit": "b4c0e8de2e47",
       "rationale": "ALE telemetry and skill-usage instrumentation owned by Hit Network observability.",
       "reapply": "checkout-subtree",
-      "check": "grep:ale"
+      "check": "grep:Mission Control crash-loop"
     },
     {
       "path": "tasks/plans/fix-task-index-sync.md",
@@ -526,7 +526,7 @@
       "source_commit": "b4c0e8de2e47",
       "rationale": "Hit Network fork-local documentation and planning artifacts.",
       "reapply": "checkout-subtree",
-      "check": "grep:Lex"
+      "check": "grep:task_index_sync.py"
     },
     {
       "path": "tasks/plans/scheduler-audit-arm-a-jobsjson.md",
@@ -542,7 +542,7 @@
       "source_commit": "b4c0e8de2e47",
       "rationale": "Scheduler/SIE guard customization owned by Hit Network cron reliability.",
       "reapply": "checkout-subtree",
-      "check": "grep:exception"
+      "check": "grep:SHADOW Layer"
     },
     {
       "path": "tasks/plans/scheduler-audit-arm-c-convex-pillars.md",
@@ -566,7 +566,7 @@
       "source_commit": "3687c2c567a7",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "checkout-subtree",
-      "check": "grep:curator"
+      "check": "grep:graduation"
     },
     {
       "path": "tests/agent/test_insights_skill_usage.py",
@@ -574,7 +574,7 @@
       "source_commit": "803491de1887",
       "rationale": "ALE telemetry and skill-usage instrumentation owned by Hit Network observability.",
       "reapply": "checkout-subtree",
-      "check": "grep:skill"
+      "check": "grep:skill_usage"
     },
     {
       "path": "tests/agent/test_prompt_builder.py",
@@ -582,7 +582,7 @@
       "source_commit": "b4c0e8de2e47",
       "rationale": "Delegation/model override and prompt-builder contract owned by Hit Network dispatch workflow.",
       "reapply": "hand-merge",
-      "check": "grep:model"
+      "check": "grep:resolver_routed"
     },
     {
       "path": "tests/gateway/test_webhook_dynamic_routes.py",
@@ -598,7 +598,7 @@
       "source_commit": "8010fa879848",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:scanner"
+      "check": "grep:external_scanner"
     },
     {
       "path": "tests/plugins/test_google_meet_cartesia_sustain.py",
@@ -678,7 +678,7 @@
       "source_commit": "ac38fef57679",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:scanner"
+      "check": "grep:scan_skill_with_external_scanner"
     },
     {
       "path": "tests/tools/test_skills_tool.py",
@@ -686,7 +686,7 @@
       "source_commit": "b4c0e8de2e47",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:skill"
+      "check": "grep:skill_view"
     },
     {
       "path": "tests/tools/test_stage2_hook_gateway_bootstrap_state.py",
@@ -774,7 +774,7 @@
       "source_commit": "d062a43f7a3e",
       "rationale": "ALE telemetry and skill-usage instrumentation owned by Hit Network observability.",
       "reapply": "checkout-subtree",
-      "check": "grep:skill"
+      "check": "grep:record_skill_load"
     },
     {
       "path": "tools/mcp_tool.py",
@@ -798,7 +798,7 @@
       "source_commit": "ac38fef57679",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:scanner"
+      "check": "grep:scan_skill_with_external_scanner"
     },
     {
       "path": "tools/skills_guard.py",
@@ -806,7 +806,7 @@
       "source_commit": "8010fa879848",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:scanner"
+      "check": "grep:scan_skill_with_external_scanner"
     },
     {
       "path": "tools/skills_tool.py",
@@ -814,7 +814,7 @@
       "source_commit": "d062a43f7a3e",
       "rationale": "Skill/scanner/curator customization owned by Hit Network skill governance.",
       "reapply": "hand-merge",
-      "check": "grep:curator"
+      "check": "grep:hit_network_ale_skill_telemetry"
     },
     {
       "path": "website/docs/user-guide/configuration.md",
