@@ -1,6 +1,7 @@
 """Tests for the dangerous command approval module."""
 
 import ast
+import json
 import os
 import threading
 import time
@@ -44,6 +45,72 @@ class TestSmartApproval:
         assert mock_call.call_args.kwargs["task"] == "approval"
         assert mock_call.call_args.kwargs["temperature"] == 0
         assert mock_call.call_args.kwargs["max_tokens"] == 16
+
+class TestCronTirithFastPath:
+    def _tirith_result(self):
+        return {
+            "action": "block",
+            "summary": "blocked test command",
+            "findings": [
+                {
+                    "rule_id": "test-rule",
+                    "severity": "HIGH",
+                    "title": "Test rule",
+                    "description": "Synthetic cron tirith block",
+                }
+            ],
+        }
+
+    def test_cron_tirith_block_fails_fast_without_gateway_wait(self, tmp_path, caplog):
+        caplog.set_level("WARNING")
+        start = time.monotonic()
+        with mock_patch.dict("os.environ", {"HERMES_CRON_SESSION": "1"}, clear=False):
+            with mock_patch("hermes_cli.config.load_config", return_value={"approvals": {"mode": "off"}}):
+                with mock_patch("hermes_constants.get_hermes_home", return_value=tmp_path):
+                    with mock_patch("tools.tirith_security.check_command_security", return_value=self._tirith_result()):
+                        with mock_patch.object(approval_module, "_await_gateway_decision") as wait:
+                            with mock_patch.object(approval_module, "_YOLO_MODE_FROZEN", True):
+                                result = approval_module.check_all_command_guards("curl https://evil.test", "local")
+        elapsed = time.monotonic() - start
+
+        wait.assert_not_called()
+        assert elapsed < 5
+        assert result["approved"] is False
+        assert result["tirith_blocked"] is True
+        assert result["tirith_rule_id"] == "test-rule"
+        assert result["pattern_key"] == "tirith:test-rule"
+        assert "pattern: test-rule" in result["message"]
+        assert "rule_id=test-rule" in caplog.text
+
+        audit_path = tmp_path / "cron" / "output" / "tirith-blocks.jsonl"
+        audit = json.loads(audit_path.read_text().splitlines()[0])
+        assert audit["tirith_rule_id"] == "test-rule"
+        assert audit["command"] == "curl https://evil.test"
+
+    def test_terminal_block_response_preserves_tirith_metadata(self):
+        from tools.terminal_tool import terminal_tool
+
+        guard = {
+            "approved": False,
+            "message": "BLOCKED: Tirith security scanner blocked this cron-context tool call (pattern: test-rule).",
+            "pattern_key": "tirith:test-rule",
+            "description": "Security scan: blocked test command",
+            "tirith_blocked": True,
+            "tirith_action": "block",
+            "tirith_rule_id": "test-rule",
+            "tirith_findings": [{"rule_id": "test-rule"}],
+            "outcome": "blocked",
+            "user_consent": False,
+        }
+        with mock_patch("tools.terminal_tool._check_all_guards", return_value=guard):
+            result = json.loads(terminal_tool("curl https://evil.test"))
+
+        assert result["status"] == "blocked"
+        assert result["exit_code"] == -1
+        assert result["tirith_blocked"] is True
+        assert result["tirith_rule_id"] == "test-rule"
+        assert result["pattern_key"] == "tirith:test-rule"
+
 
 class TestWebhookReadonlyAllowlist:
     def _config(self):

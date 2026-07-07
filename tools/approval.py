@@ -1781,6 +1781,64 @@ def _format_tirith_description(tirith_result: dict) -> str:
     return "Security scan — " + "; ".join(parts)
 
 
+def _tirith_primary_rule_id(tirith_result: dict) -> str:
+    findings = tirith_result.get("findings") or []
+    if findings and isinstance(findings[0], dict):
+        return str(findings[0].get("rule_id") or "unknown")
+    return "unknown"
+
+
+def _append_cron_tirith_audit(command: str, tirith_result: dict, description: str) -> None:
+    try:
+        from hermes_constants import get_hermes_home
+        path = get_hermes_home() / "cron" / "output" / "tirith-blocks.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "session_key": get_current_session_key(default=""),
+            "command": command,
+            "tirith_action": tirith_result.get("action"),
+            "tirith_rule_id": _tirith_primary_rule_id(tirith_result),
+            "description": description,
+            "findings": tirith_result.get("findings") or [],
+            "summary": tirith_result.get("summary") or "",
+        }
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        logger.debug("Failed to write cron tirith audit row: %s", exc)
+
+
+def _cron_tirith_block_result(command: str, tirith_result: dict) -> dict:
+    rule_id = _tirith_primary_rule_id(tirith_result)
+    pattern_key = f"tirith:{rule_id}"
+    description = _format_tirith_description(tirith_result)
+    logger.warning(
+        "Tirith blocked cron command (rule_id=%s action=%s): %s",
+        rule_id,
+        tirith_result.get("action"),
+        command[:200],
+    )
+    _append_cron_tirith_audit(command, tirith_result, description)
+    return {
+        "approved": False,
+        "message": (
+            f"BLOCKED: Tirith security scanner blocked this cron-context tool "
+            f"call (pattern: {rule_id}). Cron jobs run without a user present "
+            "to approve security warnings, so the command failed immediately. "
+            "Find an alternative approach that avoids this command."
+        ),
+        "pattern_key": pattern_key,
+        "description": description,
+        "tirith_blocked": True,
+        "tirith_action": tirith_result.get("action"),
+        "tirith_rule_id": rule_id,
+        "tirith_findings": tirith_result.get("findings") or [],
+        "outcome": "blocked",
+        "user_consent": False,
+    }
+
+
 def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
                             *, surface: str = "gateway") -> dict:
     """Enqueue *approval_data*, notify the user, and block the calling agent
@@ -1931,6 +1989,18 @@ def check_all_command_guards(command: str, env_type: str,
         logger.warning("Sudo stdin guard block: %s (command: %s)",
                        sudo_guess_desc, command[:200])
         return _sudo_stdin_block_result(sudo_guess_desc)
+
+    # Cron has no user present to approve tirith findings. Run tirith before
+    # approval/yolo shortcuts so scanner blocks fail fast with structured
+    # metadata instead of falling into the gateway approval timeout path.
+    if env_var_enabled("HERMES_CRON_SESSION"):
+        try:
+            from tools.tirith_security import check_command_security
+            cron_tirith_result = check_command_security(command)
+        except ImportError:
+            cron_tirith_result = {"action": "allow", "findings": [], "summary": ""}
+        if cron_tirith_result.get("action") in {"block", "warn"}:
+            return _cron_tirith_block_result(command, cron_tirith_result)
 
     # --yolo or approvals.mode=off: bypass all approval prompts.
     # Gateway /yolo is session-scoped; CLI --yolo remains process-scoped.
