@@ -10,11 +10,13 @@ import copy
 import json
 import logging
 import shutil
+import sys
 import tempfile
 import threading
 import time
 import os
 import re
+import traceback
 import uuid
 
 # Cross-process advisory file locking for jobs.json critical sections.
@@ -686,6 +688,43 @@ def load_jobs() -> List[Dict[str, Any]]:
     )
 
 
+def _jobs_writer_provenance_path() -> Path:
+    """Return the local provenance log for every save_jobs write."""
+    return CRON_DIR / "jobs-writer-provenance.jsonl"
+
+
+def _append_jobs_writer_provenance(jobs: List[Dict[str, Any]]):
+    """Best-effort writer audit trail for jobs.json.
+
+    This must never block cron. The shrink watchdog consumes this trail when it
+    needs to distinguish legitimate API writes from suspicious direct clobbers.
+    """
+    try:
+        path = _jobs_writer_provenance_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stack = []
+        for frame in traceback.extract_stack(limit=12)[:-2]:
+            stack.append({
+                "file": frame.filename,
+                "line": frame.lineno,
+                "name": frame.name,
+            })
+        record = {
+            "ts": _hermes_now().isoformat(),
+            "pid": os.getpid(),
+            "ppid": os.getppid(),
+            "cmdline": " ".join(sys.argv),
+            "jobs_file": str(JOBS_FILE),
+            "job_count": len(jobs),
+            "job_ids": [j.get("id") for j in jobs if isinstance(j, dict) and j.get("id")],
+            "stack": stack,
+        }
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, sort_keys=True) + "\n")
+    except Exception:
+        logger.debug("Failed to append jobs writer provenance", exc_info=True)
+
+
 def _save_jobs_unlocked(jobs: List[Dict[str, Any]]):
     """Save all jobs to storage. Caller must hold _jobs_lock()."""
     ensure_dirs()
@@ -697,6 +736,7 @@ def _save_jobs_unlocked(jobs: List[Dict[str, Any]]):
             os.fsync(f.fileno())
         atomic_replace(tmp_path, JOBS_FILE)
         _secure_file(JOBS_FILE)
+        _append_jobs_writer_provenance(jobs)
     except BaseException:
         try:
             os.unlink(tmp_path)
