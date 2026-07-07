@@ -1303,6 +1303,39 @@ class TestSkillViewCollisionDetection:
         assert "Ambiguous" in result["error"]
         assert len(result["matches"]) == 2
 
+    def test_ambiguous_error_includes_each_categorized_match(self, tmp_path):
+        """Cron-context callers get the exact categorized paths in the error."""
+        local_dir = tmp_path / "local"
+        external_dir = tmp_path / "external"
+        local_dir.mkdir()
+        external_dir.mkdir()
+
+        _make_skill(
+            local_dir,
+            "cron-execution-patterns",
+            category="infrastructure",
+            body="LOCAL VERSION",
+        )
+        _make_skill(
+            external_dir,
+            "cron-execution-patterns",
+            category="hit-network",
+            body="EXTERNAL VERSION",
+        )
+
+        p1, p2 = self._patch_dirs(local_dir, [external_dir])
+        with p1, p2:
+            raw = skill_view("cron-execution-patterns")
+
+        result = json.loads(raw)
+        assert result["success"] is False
+        assert "infrastructure/cron-execution-patterns" in result["error"]
+        assert "hit-network/cron-execution-patterns" in result["error"]
+        assert result["qualified_matches"] == [
+            "infrastructure/cron-execution-patterns",
+            "hit-network/cron-execution-patterns",
+        ]
+
     def test_collision_resolvable_via_categorized_path(self, tmp_path):
         """User can recover from a collision by passing the full
         categorized path — the bare name is ambiguous, the path is not."""

@@ -1024,6 +1024,33 @@ def skill_view(
         candidates: List[Tuple[Optional[Path], Path]] = []  # (skill_dir, skill_md)
         seen_md: set = set()
 
+        def _candidate_load_path(sd: Optional[Path], smd: Path) -> str:
+            """Return the relative skill name/path the caller can pass back."""
+            try:
+                resolved = smd.resolve()
+            except Exception:
+                resolved = smd
+
+            for root in all_dirs:
+                try:
+                    root_resolved = root.resolve()
+                except Exception:
+                    root_resolved = root
+                try:
+                    if sd is not None:
+                        rel = sd.resolve().relative_to(root_resolved)
+                    else:
+                        rel = resolved.relative_to(root_resolved)
+                except Exception:
+                    continue
+                if sd is None and rel.suffix == ".md":
+                    rel = rel.with_suffix("")
+                return rel.as_posix()
+
+            if sd is not None:
+                return sd.name
+            return smd.stem
+
         def _record(sd: Optional[Path], smd: Path) -> None:
             try:
                 key = smd.resolve()
@@ -1096,8 +1123,10 @@ def skill_view(
 
         if len(candidates) > 1:
             paths = [str(smd) for _, smd in candidates]
+            load_paths = [_candidate_load_path(sd, smd) for sd, smd in candidates]
+            load_path_lines = ", ".join(load_paths)
             logging.getLogger(__name__).warning(
-                "Skill name collision for '%s': %d candidates — %s",
+                "Skill name collision for '%s': %d candidates: %s",
                 name, len(candidates), "; ".join(paths),
             )
             return json.dumps(
@@ -1106,9 +1135,11 @@ def skill_view(
                     "error": (
                         f"Ambiguous skill name '{name}': {len(candidates)} skills "
                         "match across your local skills dir and external_dirs. "
-                        "Refusing to guess — load one explicitly by its categorized path."
+                        "Refusing to guess, load one explicitly by its categorized path: "
+                        f"{load_path_lines}."
                     ),
                     "matches": paths,
+                    "qualified_matches": load_paths,
                     "hint": (
                         "Pass the full relative path instead of the bare name "
                         "(e.g., 'category/skill-name'), or rename one of the "
