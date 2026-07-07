@@ -104,6 +104,133 @@ def _gateway_surface_passes_raw_text(platform: Any) -> bool:
     return _gateway_platform_value(platform) in _GATEWAY_RAW_TEXT_PLATFORMS
 
 
+def _gateway_startup_guard_issue(platform: Any, error_code: Optional[str], error_message: Optional[str]) -> Optional[dict[str, str]]:
+    """Return a startup guard issue spec for misconfigs that must surface beyond logs."""
+    platform_value = _gateway_platform_value(platform)
+    message = error_message or ""
+    if (
+        platform_value == "sms"
+        and error_code == "sms_missing_webhook_url"
+        and "SMS_WEBHOOK_URL" in message
+    ):
+        return {
+            "platform": "sms",
+            "env_var": "SMS_WEBHOOK_URL",
+            "dedup_key": "gateway-startup-missing-env-SMS_WEBHOOK_URL",
+            "title": "Gateway SMS disabled: SMS_WEBHOOK_URL missing",
+            "suggested_fix": "Set SMS_WEBHOOK_URL to the public Twilio webhook URL configured in Twilio Console, then restart the Hermes gateway.",
+        }
+    return None
+
+
+def _write_gateway_startup_guard_morning_notice(issue: dict[str, str], error_message: str) -> Optional[Path]:
+    """Queue a one-line notice for morning-delivery-compile without direct buzzing."""
+    try:
+        held_dir = Path(os.getenv("HERMES_CRON_HELD_DIR", "/tmp/cron-held"))
+        held_dir.mkdir(parents=True, exist_ok=True)
+        path = held_dir / f"gateway-{issue['platform']}-{issue['env_var'].lower()}-misconfig.md"
+        line = (
+            f"Gateway {issue['platform']} is down: {issue['env_var']} is missing. "
+            f"MC dedup_key={issue['dedup_key']}. Error: {error_message}\n"
+        )
+        path.write_text(line, encoding="utf-8")
+        return path
+    except Exception:
+        logger.debug("Failed to queue startup guard morning notice", exc_info=True)
+        return None
+
+
+def _surface_gateway_startup_guard(platform: Any, error_code: Optional[str], error_message: Optional[str]) -> None:
+    """File an MC card and morning-brief notice for known boot-time platform refusals."""
+    issue = _gateway_startup_guard_issue(platform, error_code, error_message)
+    if not issue:
+        return
+
+    message = error_message or "unknown error"
+    notice_path = _write_gateway_startup_guard_morning_notice(issue, message)
+
+    helper_raw = os.getenv(
+        "HERMES_MC_CARD_FROM_CRON",
+        str(Path.home() / ".hermes" / "scripts" / "mc-card-from-cron.py"),
+    )
+    helper = Path(helper_raw).expanduser()
+    if not helper.exists():
+        logger.warning(
+            "Startup guard could not file MC card for %s: helper missing at %s",
+            issue["dedup_key"],
+            helper,
+        )
+        return
+
+    body = "\n".join(
+        [
+            "## Summary",
+            f"Gateway platform `{issue['platform']}` refused to start at boot because `{issue['env_var']}` is missing.",
+            "",
+            "## Signal",
+            f"Platform: `{issue['platform']}`",
+            f"Missing env var: `{issue['env_var']}`",
+            f"Literal error: `{message}`",
+            "",
+            "## Suggested fix",
+            issue["suggested_fix"],
+            "",
+            "## Morning notice",
+            f"Queued for morning-delivery-compile: {notice_path or 'unavailable'}",
+            "",
+        ]
+    )
+
+    tmp_path: Optional[str] = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as tmp:
+            tmp.write(body)
+            tmp_path = tmp.name
+        import subprocess
+
+        cmd = [
+            sys.executable,
+            str(helper),
+            "--title",
+            issue["title"],
+            "--body-file",
+            tmp_path,
+            "--dedup-key",
+            issue["dedup_key"],
+            "--priority",
+            "critical",
+            "--category",
+            "tech",
+            "--agent",
+            "grant",
+            "--tag",
+            "infra-broken",
+            "--tag",
+            "gateway",
+            "--tag",
+            issue["platform"],
+        ]
+        proc = subprocess.run(cmd, text=True, capture_output=True, timeout=90, check=False)
+        if proc.returncode == 0:
+            logger.info("Startup guard surfaced %s to MC: %s", issue["dedup_key"], proc.stdout.strip())
+        else:
+            logger.warning(
+                "Startup guard failed to file MC card for %s (rc=%s): %s%s",
+                issue["dedup_key"],
+                proc.returncode,
+                proc.stderr.strip(),
+                proc.stdout.strip(),
+            )
+    except Exception:
+        logger.warning("Startup guard failed for %s", issue["dedup_key"], exc_info=True)
+    finally:
+        if tmp_path:
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
 _GATEWAY_PROVIDER_ERROR_RE = re.compile(
     r"("  # infrastructure/provider error preambles, not ordinary assistant prose
     r"api\s+(?:call\s+)?failed"
@@ -6127,6 +6254,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             platform_state="retrying" if adapter.fatal_error_retryable else "fatal",
                             error_code=adapter.fatal_error_code,
                             error_message=adapter.fatal_error_message,
+                        )
+                        _surface_gateway_startup_guard(
+                            platform,
+                            adapter.fatal_error_code,
+                            adapter.fatal_error_message,
                         )
                         target = (
                             startup_retryable_errors
