@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 
 
-def _make_task(kb, *, assignee: str):
+def _make_task(kb, *, assignee: str, skills=None):
     return kb.Task(
         id="t_spawn_tools",
         title="spawn tools",
@@ -21,6 +21,7 @@ def _make_task(kb, *, assignee: str):
         claim_expires=None,
         tenant=None,
         current_run_id=7,
+        skills=skills,
     )
 
 
@@ -87,6 +88,85 @@ agent:
     pinned = captured["cmd"][captured["cmd"].index("--toolsets") + 1].split(",")
     for required in ("terminal", "web", "file", "skills", "code_execution", "delegation"):
         assert required in pinned
+
+
+def test_default_spawn_overlays_default_root_for_forced_profile_missing_skill(monkeypatch, tmp_path):
+    root = tmp_path / ".hermes"
+    profile = root / "profiles" / "sage"
+    profile.mkdir(parents=True)
+    root.joinpath("config.yaml").write_text("toolsets:\n  - kanban\n", encoding="utf-8")
+    profile.joinpath("config.yaml").write_text("toolsets:\n  - hermes-cli\n", encoding="utf-8")
+    skill_dir = root / "skills" / "hit-network" / "mission-control-card-lifecycle"
+    skill_dir.mkdir(parents=True)
+    skill_dir.joinpath("SKILL.md").write_text("---\nname: mission-control-card-lifecycle\n---\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(root))
+
+    from hermes_cli import kanban_db as kb
+
+    monkeypatch.setattr(kb, "_resolve_hermes_argv", lambda: ["hermes"])
+
+    captured = {}
+
+    class FakeProc:
+        pid = 4243
+
+    def fake_popen(cmd, *args, **kwargs):
+        captured["cmd"] = list(cmd)
+        captured["env"] = dict(kwargs.get("env") or {})
+        return FakeProc()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    pid = kb._default_spawn(
+        _make_task(kb, assignee="sage", skills=["hit-network:mission-control-card-lifecycle"]),
+        str(workspace),
+    )
+
+    assert pid == 4243
+    assert "--skills" in captured["cmd"]
+    skill_arg = captured["cmd"][captured["cmd"].index("--skills") + 1]
+    assert skill_arg == "hit-network:mission-control-card-lifecycle"
+    assert captured["env"]["HERMES_EXTRA_SKILLS_DIRS"] == str(root / "skills")
+
+
+def test_default_spawn_skips_truly_missing_forced_skill(monkeypatch, tmp_path):
+    root = tmp_path / ".hermes"
+    profile = root / "profiles" / "sage"
+    profile.mkdir(parents=True)
+    root.joinpath("config.yaml").write_text("toolsets:\n  - kanban\n", encoding="utf-8")
+    profile.joinpath("config.yaml").write_text("toolsets:\n  - hermes-cli\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(root))
+
+    from hermes_cli import kanban_db as kb
+
+    monkeypatch.setattr(kb, "_resolve_hermes_argv", lambda: ["hermes"])
+
+    captured = {}
+
+    class FakeProc:
+        pid = 4244
+
+    def fake_popen(cmd, *args, **kwargs):
+        captured["cmd"] = list(cmd)
+        captured["prompt"] = cmd[-1]
+        captured["env"] = dict(kwargs.get("env") or {})
+        return FakeProc()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    pid = kb._default_spawn(
+        _make_task(kb, assignee="sage", skills=["mission-control-card-lifecycle"]),
+        str(workspace),
+    )
+
+    assert pid == 4244
+    assert "--skills" not in captured["cmd"]
+    assert "HERMES_EXTRA_SKILLS_DIRS" not in captured["env"]
+    assert "Dispatcher skipped forced skill" in captured["prompt"]
 
 
 def test_resolve_worker_cli_toolsets_uses_profile_home_not_parent_config(monkeypatch, tmp_path):

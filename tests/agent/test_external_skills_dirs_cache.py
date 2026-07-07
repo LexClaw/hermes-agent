@@ -117,6 +117,34 @@ def test_returned_list_is_a_copy(hermes_home_with_config):
     assert Path("/tmp/should-not-persist") not in second
 
 
+def test_env_overlay_is_part_of_cache_key(hermes_home_with_config, monkeypatch, tmp_path):
+    """Runtime skill overlays must not be hidden by an earlier cache hit."""
+    _home, external, _cfg = hermes_home_with_config
+    overlay = tmp_path / "overlay_skills"
+    overlay.mkdir()
+
+    assert get_external_skills_dirs() == [external.resolve()]
+
+    monkeypatch.setenv("HERMES_EXTRA_SKILLS_DIRS", str(overlay))
+    assert get_external_skills_dirs() == [external.resolve(), overlay.resolve()]
+
+    monkeypatch.delenv("HERMES_EXTRA_SKILLS_DIRS", raising=False)
+    assert get_external_skills_dirs() == [external.resolve()]
+
+
+def test_env_overlay_works_without_config(tmp_path, monkeypatch):
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    overlay = tmp_path / "overlay_skills"
+    overlay.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HERMES_EXTRA_SKILLS_DIRS", str(overlay))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _external_dirs_cache_clear()
+
+    assert get_external_skills_dirs() == [overlay.resolve()]
+
+
 def test_cache_key_is_per_config_path(tmp_path, monkeypatch):
     """Two different HERMES_HOMEs keep separate cache entries."""
     home_a = tmp_path / "home_a" / ".hermes"

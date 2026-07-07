@@ -7581,6 +7581,85 @@ def _resolve_worker_cli_toolsets(hermes_home: Optional[str]) -> Optional[list[st
         return None
 
 
+def _skill_name_candidates(skill: str) -> list[str]:
+    value = str(skill).strip()
+    if not value:
+        return []
+    candidates = [value]
+    if ":" in value:
+        namespace, name = value.split(":", 1)
+        if namespace and name:
+            candidates.append(f"{namespace}/{name}")
+    return candidates
+
+
+def _skill_available_under_root(skill: str, root: Path, *, allow_plugin_qualified: bool = True) -> bool:
+    skills_root = Path(root) / "skills"
+    for candidate in _skill_name_candidates(skill):
+        if (skills_root / candidate / "SKILL.md").exists():
+            return True
+        if (skills_root / candidate / "DESCRIPTION.md").exists():
+            return True
+    value = str(skill).strip()
+    if value and "/" not in value and ":" not in value and skills_root.is_dir():
+        for candidate in skills_root.glob(f"*/{value}"):
+            if (candidate / "SKILL.md").exists():
+                return True
+            if (candidate / "DESCRIPTION.md").exists():
+                return True
+    if allow_plugin_qualified and ":" in str(skill):
+        return True
+    return False
+
+
+def _append_env_path_list(env: dict[str, str], key: str, path: Path) -> None:
+    new_value = str(path)
+    existing = env.get(key, "")
+    pieces = [p for p in re.split(r"[," + re.escape(os.pathsep) + r"]", existing) if p]
+    if new_value not in pieces:
+        pieces.append(new_value)
+    env[key] = os.pathsep.join(pieces)
+
+
+def _prepare_forced_worker_skills(
+    skills: Optional[Iterable[str]],
+    *,
+    worker_home: Optional[str],
+    env: dict[str, str],
+) -> tuple[list[str], list[str]]:
+    """Return safe forced skills plus prompt notes for skipped skills."""
+    if not skills:
+        return [], []
+    from hermes_constants import get_default_hermes_root
+
+    worker_root = Path(worker_home) if worker_home else None
+    default_root = get_default_hermes_root()
+    forced: list[str] = []
+    notes: list[str] = []
+    for raw in skills:
+        skill = str(raw).strip()
+        if not skill:
+            continue
+        if worker_root and _skill_available_under_root(
+            skill, worker_root, allow_plugin_qualified=False,
+        ):
+            forced.append(skill)
+            continue
+        if _skill_available_under_root(skill, default_root, allow_plugin_qualified=False):
+            _append_env_path_list(env, "HERMES_EXTRA_SKILLS_DIRS", default_root / "skills")
+            forced.append(skill)
+            continue
+        if _skill_available_under_root(skill, default_root, allow_plugin_qualified=True):
+            forced.append(skill)
+            continue
+        notes.append(
+            f"Dispatcher skipped forced skill {skill!r}: not resolvable in "
+            "the worker profile or default skills tree. Use the task body and "
+            "available skills instead of exiting at startup."
+        )
+    return forced, notes
+
+
 def _default_spawn(
     task: Task,
     workspace: str,
@@ -7689,6 +7768,15 @@ def _default_spawn(
     # what the tool reads — set it explicitly here so comments are
     # attributed correctly regardless of how the child loads config.
     env["HERMES_PROFILE"] = profile_arg
+    forced_skills, skipped_skill_notes = _prepare_forced_worker_skills(
+        task.skills,
+        worker_home=env.get("HERMES_HOME"),
+        env=env,
+    )
+    if skipped_skill_notes:
+        prompt += "\n\nDispatcher startup notes:\n" + "\n".join(
+            f"- {note}" for note in skipped_skill_notes
+        )
 
     cmd = [
         *_resolve_hermes_argv(),
@@ -7704,10 +7792,9 @@ def _default_spawn(
     # accepts both forms (action='append' + comma-split), but
     # per-name pairs are easier to read in `ps` output and avoid any
     # quoting ambiguity if a skill name ever contains unusual chars.
-    if task.skills:
-        for sk in task.skills:
-            if sk:
-                cmd.extend(["--skills", sk])
+    if forced_skills:
+        for sk in forced_skills:
+            cmd.extend(["--skills", sk])
     if task.model_override:
         cmd.extend(["-m", task.model_override])
     worker_toolsets = _resolve_worker_cli_toolsets(env.get("HERMES_HOME"))

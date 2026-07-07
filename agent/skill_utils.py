@@ -440,13 +440,14 @@ def _normalize_string_set(values) -> Set[str]:
 
 # ── External skills directories ──────────────────────────────────────────
 
-# (config_path_str, mtime_ns) -> resolved external dirs list.  Keyed by
-# mtime_ns so a config.yaml edit mid-run is picked up automatically;
-# otherwise every call would re-read + re-YAML-parse the 15KB config,
-# which becomes the dominant cost of ``hermes`` startup when ~120 skills
-# each trigger a category lookup during banner construction (10+ seconds
-# of pure waste).
-_EXTERNAL_DIRS_CACHE: Dict[Tuple[str, int], List[Path]] = {}
+# (config_path_str, mtime_ns, env_overlay) -> resolved external dirs list.
+# Keyed by mtime_ns so a config.yaml edit mid-run is picked up automatically;
+# keyed by HERMES_EXTRA_SKILLS_DIRS so dispatcher-spawned workers can receive
+# a runtime-only default-root skill overlay without poisoning later cache hits.
+# Otherwise every call would re-read + re-YAML-parse the 15KB config, which
+# becomes the dominant cost of ``hermes`` startup when ~120 skills each trigger
+# a category lookup during banner construction (10+ seconds of pure waste).
+_EXTERNAL_DIRS_CACHE: Dict[Tuple[str, int, str], List[Path]] = {}
 
 
 def _external_dirs_cache_clear() -> None:
@@ -455,53 +456,24 @@ def _external_dirs_cache_clear() -> None:
     _raw_config_cache_clear()
 
 
-def get_external_skills_dirs() -> List[Path]:
-    """Read ``skills.external_dirs`` from config.yaml and return validated paths.
-
-    Each entry is expanded (``~`` and ``${VAR}``) and resolved to an absolute
-    path.  Only directories that actually exist are returned.  Duplicates and
-    paths that resolve to the local ``~/.hermes/skills/`` are silently skipped.
-
-    Cached in-process, keyed on ``config.yaml`` mtime — the function is
-    called once per skill during banner / tool-registry scans, and YAML
-    parsing a non-trivial config dominates ``hermes`` cold-start time
-    when the cache is absent.
-    """
-    config_path = get_config_path()
-    if not config_path.exists():
+def _split_external_skill_dir_entries(raw_dirs) -> List[str]:
+    if raw_dirs is None:
         return []
-
-    # Cache key: (absolute path, mtime_ns).  stat() is ~2us vs ~85ms for
-    # the full YAML parse, so the fast path is nearly free.
-    try:
-        stat = config_path.stat()
-        cache_key: Tuple[str, int] = (str(config_path), stat.st_mtime_ns)
-    except OSError:
-        cache_key = None  # type: ignore[assignment]
-
-    if cache_key is not None:
-        cached = _EXTERNAL_DIRS_CACHE.get(cache_key)
-        if cached is not None:
-            # Return a copy so callers can't mutate the cached list.
-            return list(cached)
-
-    parsed = _load_raw_config()
-    if not parsed:
-        return []
-
-    skills_cfg = parsed.get("skills")
-    if not isinstance(skills_cfg, dict):
-        return []
-
-    raw_dirs = skills_cfg.get("external_dirs")
-    if not raw_dirs:
-        result: List[Path] = []
-        if cache_key is not None:
-            _EXTERNAL_DIRS_CACHE[cache_key] = list(result)
-        return result
     if isinstance(raw_dirs, str):
         raw_dirs = [raw_dirs]
     if not isinstance(raw_dirs, list):
+        return []
+    entries: List[str] = []
+    for raw in raw_dirs:
+        for piece in re.split(r"[," + re.escape(os.pathsep) + r"]", str(raw)):
+            piece = piece.strip()
+            if piece:
+                entries.append(piece)
+    return entries
+
+
+def _resolve_external_skill_dirs(raw_entries: List[str]) -> List[Path]:
+    if not raw_entries:
         return []
 
     from hermes_constants import get_hermes_home
@@ -511,14 +483,9 @@ def get_external_skills_dirs() -> List[Path]:
     seen: Set[Path] = set()
     result = []
 
-    for entry in raw_dirs:
-        entry = str(entry).strip()
-        if not entry:
-            continue
-        # Expand ~ and environment variables
+    for entry in raw_entries:
         expanded = os.path.expanduser(os.path.expandvars(entry))
         p = Path(expanded)
-        # Resolve relative paths against HERMES_HOME, not cwd
         if not p.is_absolute():
             p = (hermes_home / p).resolve()
         else:
@@ -532,6 +499,57 @@ def get_external_skills_dirs() -> List[Path]:
             result.append(p)
         else:
             logger.debug("External skills dir does not exist, skipping: %s", p)
+    return result
+
+
+def get_external_skills_dirs() -> List[Path]:
+    """Read configured plus runtime-overlay external skill dirs.
+
+    ``skills.external_dirs`` is the persistent user config. ``HERMES_EXTRA_SKILLS_DIRS``
+    is a process-local overlay used by the Kanban dispatcher when a worker profile
+    must load a forced task skill that exists only in the default profile tree.
+    """
+    config_path = get_config_path()
+    env_overlay = os.environ.get("HERMES_EXTRA_SKILLS_DIRS", "")
+    if not config_path.exists():
+        return _resolve_external_skill_dirs(
+            _split_external_skill_dir_entries(env_overlay)
+        )
+
+    try:
+        stat = config_path.stat()
+        cache_key: Tuple[str, int, str] = (
+            str(config_path), stat.st_mtime_ns, env_overlay,
+        )
+    except OSError:
+        cache_key = None  # type: ignore[assignment]
+
+    if cache_key is not None:
+        cached = _EXTERNAL_DIRS_CACHE.get(cache_key)
+        if cached is not None:
+            return list(cached)
+
+    parsed = _load_raw_config()
+    if not parsed:
+        result = _resolve_external_skill_dirs(
+            _split_external_skill_dir_entries(env_overlay)
+        )
+        if cache_key is not None:
+            _EXTERNAL_DIRS_CACHE[cache_key] = list(result)
+        return result
+
+    skills_cfg = parsed.get("skills")
+    if not isinstance(skills_cfg, dict):
+        result = _resolve_external_skill_dirs(
+            _split_external_skill_dir_entries(env_overlay)
+        )
+        if cache_key is not None:
+            _EXTERNAL_DIRS_CACHE[cache_key] = list(result)
+        return result
+
+    raw_entries = _split_external_skill_dir_entries(skills_cfg.get("external_dirs"))
+    raw_entries.extend(_split_external_skill_dir_entries(env_overlay))
+    result = _resolve_external_skill_dirs(raw_entries)
 
     if cache_key is not None:
         _EXTERNAL_DIRS_CACHE[cache_key] = list(result)
