@@ -21,6 +21,7 @@ import re
 import sqlite3
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from agent.memory_manager import sanitize_context
@@ -671,12 +672,31 @@ CREATE TABLE IF NOT EXISTS compression_locks (
     expires_at REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS model_fallback_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    iso_ts TEXT NOT NULL,
+    session_id TEXT,
+    job_id TEXT,
+    source TEXT,
+    agent_profile TEXT,
+    from_provider TEXT,
+    from_model TEXT,
+    to_provider TEXT,
+    to_model TEXT,
+    reason TEXT,
+    exception TEXT,
+    metadata TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_source_id ON sessions(source, id);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(expires_at);
+CREATE INDEX IF NOT EXISTS idx_model_fallback_events_ts ON model_fallback_events(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_model_fallback_events_session ON model_fallback_events(session_id);
 """
 
 # Indexes that reference columns added in later schema versions must be
@@ -1742,6 +1762,63 @@ class SessionDB:
                 (provider, base_url, billing_mode, session_id),
             )
         self._execute_write(_do)
+
+    def record_model_fallback_event(self, event: Dict[str, Any]) -> None:
+        """Persist one structured model fallback activation event."""
+        if not isinstance(event, dict):
+            return
+        timestamp = event.get("timestamp_unix")
+        if timestamp is None:
+            timestamp = time.time()
+        iso_ts = str(event.get("timestamp") or "")
+        if not iso_ts:
+            iso_ts = datetime.fromtimestamp(float(timestamp), timezone.utc).isoformat()
+        metadata = {
+            k: v for k, v in event.items()
+            if k not in {
+                "timestamp", "timestamp_unix", "session_id", "job_id", "source",
+                "agent_profile", "from_provider", "from_model", "to_provider",
+                "to_model", "reason", "exception",
+            }
+        }
+
+        def _do(conn):
+            conn.execute(
+                """INSERT INTO model_fallback_events
+                   (timestamp, iso_ts, session_id, job_id, source, agent_profile,
+                    from_provider, from_model, to_provider, to_model, reason,
+                    exception, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    float(timestamp),
+                    iso_ts,
+                    event.get("session_id") or None,
+                    event.get("job_id") or None,
+                    event.get("source") or None,
+                    event.get("agent_profile") or None,
+                    event.get("from_provider") or None,
+                    event.get("from_model") or None,
+                    event.get("to_provider") or None,
+                    event.get("to_model") or None,
+                    event.get("reason") or None,
+                    event.get("exception") or None,
+                    json.dumps(metadata, sort_keys=True) if metadata else None,
+                ),
+            )
+        self._execute_write(_do)
+
+    def list_model_fallback_events(self, since_ts: float = 0, limit: int = 1000) -> List[Dict[str, Any]]:
+        """Return structured model fallback events, newest first."""
+        with self._lock:
+            assert self._conn is not None
+            rows = self._conn.execute(
+                """SELECT * FROM model_fallback_events
+                   WHERE timestamp >= ?
+                   ORDER BY timestamp DESC
+                   LIMIT ?""",
+                (since_ts, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def update_token_counts(
         self,

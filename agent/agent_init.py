@@ -377,6 +377,19 @@ def init_agent(
     except Exception:
         pass
 
+    try:
+        from agent.model_fallback_policy import resolve_per_agent_fallback_chain
+
+        _policy_fallback_chain = resolve_per_agent_fallback_chain(
+            provider=agent.provider,
+            model=agent.model,
+            explicit_fallback=fallback_model,
+        )
+        if _policy_fallback_chain:
+            fallback_model = _policy_fallback_chain  # type: ignore[assignment]
+    except Exception as _fb_policy_err:
+        logger.debug("Per-agent fallback policy unavailable: %s", _fb_policy_err)
+
     # GPT-5.x models usually require the Responses API path, but some
     # providers have exceptions (for example Copilot's gpt-5-mini still
     # uses chat completions). Also auto-upgrade for direct OpenAI URLs
@@ -1171,6 +1184,7 @@ def init_agent(
         "max_iterations": agent.max_iterations,
         "reasoning_config": reasoning_config,
         "max_tokens": max_tokens,
+        "fallback_chain": getattr(agent, "_fallback_chain", []),
     }
     
     # In-memory todo list for task planning (one per agent/session)

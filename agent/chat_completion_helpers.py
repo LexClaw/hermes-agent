@@ -1221,6 +1221,7 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
             fb_api_mode = "bedrock_converse"
 
         old_model = agent.model
+        old_provider = getattr(agent, "provider", "") or ""
 
         # Clear the per-config context_length override so the fallback
         # model's actual context window is resolved instead of inheriting
@@ -1361,6 +1362,29 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         # Keep the prompt's self-identity in sync with the model actually
         # answering, so "what model are you?" doesn't report the primary.
         rewrite_prompt_model_identity(agent, fb_model, fb_provider)
+
+        try:
+            from agent.model_fallback_policy import record_fallback_event, telemetry_event
+
+            _event = telemetry_event(
+                agent,
+                from_provider=old_provider,
+                from_model=old_model,
+                to_provider=fb_provider,
+                to_model=fb_model,
+                reason=reason,
+            )
+            record_fallback_event(agent, _event)
+            _db = getattr(agent, "_session_db", None)
+            if _db is not None and hasattr(_db, "update_session_billing_route"):
+                _db.update_session_billing_route(
+                    getattr(agent, "session_id", ""),
+                    provider=fb_provider,
+                    base_url=fb_base_url,
+                    billing_mode="fallback",
+                )
+        except Exception as _telemetry_err:
+            logger.warning("Fallback telemetry failed: %s", _telemetry_err)
 
         agent._buffer_status(
             f"🔄 Primary model failed — switching to fallback: "
