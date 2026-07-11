@@ -20,6 +20,7 @@ from tools.skill_manager_tool import (
     _remove_file,
     skill_manage,
     MAX_NAME_LENGTH,
+    MAX_SKILL_CONTENT_CHARS,
 )
 
 
@@ -543,6 +544,66 @@ class TestSkillManageDispatcher:
             raw = skill_manage(action="patch", name="test")
         result = json.loads(raw)
         assert result["success"] is False
+
+    def test_over_cap_append_patch_overflows_to_reference(self, tmp_path):
+        marker = "\nUNIQUE_APPEND_ANCHOR\n"
+        base = (
+            VALID_SKILL_CONTENT
+            + ("x" * (MAX_SKILL_CONTENT_CHARS - len(VALID_SKILL_CONTENT) - len(marker) - 10))
+            + marker
+        )
+        appended = "APPENDED_LEARNING_BLOCK\n"
+        with _skill_dir(tmp_path):
+            _create_skill("test-skill", base)
+            raw = skill_manage(
+                action="patch",
+                name="test-skill",
+                old_string=marker,
+                new_string=marker + appended,
+            )
+
+        result = json.loads(raw)
+        assert result["success"] is True
+        skill_dir = tmp_path / "test-skill"
+        skill_md = (skill_dir / "SKILL.md").read_text()
+        overflow_path = Path(result["overflow_path"])
+        overflow = overflow_path.read_text()
+        assert len(skill_md) < MAX_SKILL_CONTENT_CHARS
+        assert overflow_path.exists()
+        assert "APPENDED_LEARNING_BLOCK" in overflow
+        assert "APPENDED_LEARNING_BLOCK" not in skill_md
+        assert (skill_md + overflow).count("APPENDED_LEARNING_BLOCK") == 1
+        assert str(overflow_path.relative_to(skill_dir)) in skill_md
+
+    def test_over_cap_append_edit_overflows_to_reference(self, tmp_path):
+        base = VALID_SKILL_CONTENT + ("x" * (MAX_SKILL_CONTENT_CHARS - len(VALID_SKILL_CONTENT) - 10))
+        appended = "\nEDITED_APPEND_BLOCK\n"
+        with _skill_dir(tmp_path):
+            _create_skill("test-skill", base)
+            raw = skill_manage(action="edit", name="test-skill", content=base + appended)
+
+        result = json.loads(raw)
+        assert result["success"] is True
+        skill_md = (tmp_path / "test-skill" / "SKILL.md").read_text()
+        overflow = Path(result["overflow_path"]).read_text()
+        assert "EDITED_APPEND_BLOCK" not in skill_md
+        assert "EDITED_APPEND_BLOCK" in overflow
+
+    def test_under_cap_patch_stays_in_skill_md(self, tmp_path):
+        with _skill_dir(tmp_path):
+            _create_skill("test-skill", VALID_SKILL_CONTENT)
+            raw = skill_manage(
+                action="patch",
+                name="test-skill",
+                old_string="Step 1: Do the thing.",
+                new_string="Step 1: Do the better thing.",
+            )
+
+        result = json.loads(raw)
+        assert result["success"] is True
+        assert "overflow_path" not in result
+        assert "Do the better thing" in (tmp_path / "test-skill" / "SKILL.md").read_text()
+        assert not (tmp_path / "test-skill" / "references").exists()
 
     def test_full_create_via_dispatcher(self, tmp_path):
         """Foreground create does NOT mark the skill as agent-created.

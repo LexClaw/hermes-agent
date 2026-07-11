@@ -436,6 +436,53 @@ def _validate_content_size(content: str, label: str = "SKILL.md") -> Optional[st
     return None
 
 
+def _prepare_overflow_append(
+    skill_dir: Path,
+    name: str,
+    original: str,
+    updated: str,
+) -> Optional[Tuple[str, Path, str]]:
+    """Split a single insertion into SKILL.md plus a referenced overflow file."""
+    prefix_len = 0
+    shared_limit = min(len(original), len(updated))
+    while prefix_len < shared_limit and original[prefix_len] == updated[prefix_len]:
+        prefix_len += 1
+
+    suffix_len = 0
+    while (
+        suffix_len < len(original) - prefix_len
+        and original[-(suffix_len + 1)] == updated[-(suffix_len + 1)]
+    ):
+        suffix_len += 1
+
+    inserted_end = len(updated) - suffix_len if suffix_len else len(updated)
+    inserted = updated[prefix_len:inserted_end]
+    if not inserted or original != updated[:prefix_len] + updated[inserted_end:]:
+        return None
+
+    references_dir = skill_dir / "references"
+    index = 1
+    while True:
+        overflow_path = references_dir / f"{name}-validation-log-{index}.md"
+        if not overflow_path.exists():
+            break
+        index += 1
+
+    relative_path = overflow_path.relative_to(skill_dir).as_posix()
+    pointer = f"\nSee [{relative_path}]({relative_path}).\n"
+    keep_limit = MAX_SKILL_CONTENT_CHARS - len(pointer) - 1
+    cut = min(prefix_len, keep_limit)
+    newline_cut = updated.rfind("\n", max(0, cut - 1000), cut + 1)
+    if newline_cut > 0:
+        cut = newline_cut + 1
+
+    main_content = updated[:cut] + pointer
+    overflow_content = updated[cut:]
+    if inserted not in overflow_content or _validate_frontmatter(main_content):
+        return None
+    return main_content, overflow_path, overflow_content
+
+
 def _resolve_skill_dir(name: str, category: str = None) -> Path:
     """Build the directory path for a new skill, optionally under a category."""
     if category:
@@ -724,10 +771,6 @@ def _edit_skill(name: str, content: str) -> Dict[str, Any]:
     if err:
         return {"success": False, "error": err}
 
-    err = _validate_content_size(content)
-    if err:
-        return {"success": False, "error": err}
-
     existing = _find_skill(name)
     if not existing:
         return {"success": False, "error": _skill_not_found_error(name)}
@@ -736,18 +779,29 @@ def _edit_skill(name: str, content: str) -> Dict[str, Any]:
         return guard
 
     skill_md = existing["path"] / "SKILL.md"
-    # Back up original content for rollback
     original_content = skill_md.read_text(encoding="utf-8") if skill_md.exists() else None
+    overflow = None
+    overflow_path: Optional[Path] = None
+    overflow_content = ""
+    err = _validate_content_size(content)
+    if err:
+        if original_content is not None:
+            overflow = _prepare_overflow_append(existing["path"], name, original_content, content)
+        if overflow is None:
+            return {"success": False, "error": err}
+        content, overflow_path, overflow_content = overflow
+        overflow_path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_text(overflow_path, overflow_content)
     _atomic_write_text(skill_md, content)
 
-    # Security scan — roll back on block
     scan_error = _security_scan_skill(existing["path"])
     if scan_error:
         if original_content is not None:
             _atomic_write_text(skill_md, original_content)
+        if overflow_path is not None:
+            overflow_path.unlink(missing_ok=True)
         return {"success": False, "error": scan_error}
 
-    # Extract description from new content for verbose notifications
     _desc = ""
     try:
         _fm_end = re.search(r'\n---\s*\n', content[3:])
@@ -757,12 +811,17 @@ def _edit_skill(name: str, content: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    return {
+    result = {
         "success": True,
         "message": f"Skill '{name}' updated (full rewrite).",
         "path": str(existing["path"]),
         "_change": {"description": _desc},
     }
+    if overflow_path is not None:
+        relative_path = overflow_path.relative_to(existing["path"])
+        result["message"] += f" Overflow append written to '{relative_path}'."
+        result["overflow_path"] = str(overflow_path)
+    return result
 
 
 def _patch_skill(
@@ -832,11 +891,18 @@ def _patch_skill(
             "file_preview": preview,
         }
 
-    # Check size limit on the result
+    # Check size limit on the result. Pure insertions overflow to references/.
     target_label = "SKILL.md" if not file_path else file_path
     err = _validate_content_size(new_content, label=target_label)
+    overflow = None
+    overflow_path: Optional[Path] = None
+    overflow_content = ""
     if err:
-        return {"success": False, "error": err}
+        if not file_path:
+            overflow = _prepare_overflow_append(skill_dir, name, content, new_content)
+        if overflow is None:
+            return {"success": False, "error": err}
+        new_content, overflow_path, overflow_content = overflow
 
     # If patching SKILL.md, validate frontmatter is still intact
     if not file_path:
@@ -848,18 +914,27 @@ def _patch_skill(
             }
 
     original_content = content  # for rollback
+    if overflow_path is not None:
+        overflow_path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_text(overflow_path, overflow_content)
     _atomic_write_text(target, new_content)
 
     # Security scan — roll back on block
     scan_error = _security_scan_skill(skill_dir)
     if scan_error:
         _atomic_write_text(target, original_content)
+        if overflow_path is not None:
+            overflow_path.unlink(missing_ok=True)
         return {"success": False, "error": scan_error}
 
     result = {
         "success": True,
         "message": f"Patched {'SKILL.md' if not file_path else file_path} in skill '{name}' ({match_count} replacement{'s' if match_count > 1 else ''}).",
     }
+    if overflow_path is not None:
+        relative_path = overflow_path.relative_to(skill_dir)
+        result["message"] += f" Overflow append written to '{relative_path}'."
+        result["overflow_path"] = str(overflow_path)
     # Include change previews for verbose notifications
     result["_change"] = {
         "old": old_string[:200] + ("…" if len(old_string) > 200 else ""),
