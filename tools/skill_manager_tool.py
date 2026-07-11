@@ -38,7 +38,7 @@ import os
 import re
 import shutil
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from hermes_constants import get_hermes_home, display_hermes_home
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -490,23 +490,78 @@ def _resolve_skill_dir(name: str, category: str = None) -> Path:
     return SKILLS_DIR / name
 
 
+def _skill_lookup_name_error(name: str) -> Optional[str]:
+    """Return an error when an existing-skill lookup name is unsafe or empty."""
+    from tools.path_security import has_traversal_component
+
+    if not isinstance(name, str):
+        return "Skill name must be a string."
+    candidate = name.strip()
+    if not candidate:
+        return "Skill name required."
+    if (
+        PurePosixPath(candidate).is_absolute()
+        or PureWindowsPath(candidate).is_absolute()
+        or PureWindowsPath(candidate).drive
+    ):
+        return "Skill name must be a relative path within the skills directory."
+    if has_traversal_component(candidate):
+        return "Skill name cannot contain '..' path traversal components."
+    return None
+
+
+def _skill_lookup_aliases(name: str) -> List[str]:
+    """Return safe equivalent lookup names, preserving exact and bare priority."""
+    aliases: List[str] = []
+
+    def add(alias: str) -> None:
+        alias = alias.strip()
+        if alias and alias not in aliases:
+            aliases.append(alias)
+
+    stripped = name.strip()
+    add(stripped)
+
+    if ":" in stripped:
+        namespace, _, bare = stripped.partition(":")
+        if namespace and bare and ":" not in bare:
+            add(bare)
+            add(f"{namespace}/{bare}")
+    elif "/" in stripped:
+        parts = PurePosixPath(stripped).parts
+        if len(parts) == 2:
+            add(parts[-1])
+
+    return aliases
+
+
 def _find_skill(name: str) -> Optional[Dict[str, Any]]:
     """
     Find a skill by name across all skill directories.
 
     Searches the local skills dir (~/.hermes/skills/) first, then any
-    external dirs configured via skills.external_dirs.  Returns
-    {"path": Path} or None.
+    external dirs configured via skills.external_dirs. Returns {"path": Path}
+    or None. Bare names resolve first, followed by category-qualified aliases
+    (category/skill and category:skill) without accepting traversal paths.
     """
+    if _skill_lookup_name_error(name):
+        return None
+
     from agent.skill_utils import get_all_skills_dirs, is_excluded_skill_path
-    for skills_dir in get_all_skills_dirs():
-        if not skills_dir.exists():
-            continue
-        for skill_md in skills_dir.rglob("SKILL.md"):
-            if is_excluded_skill_path(skill_md):
+
+    aliases = _skill_lookup_aliases(name)
+    for alias in aliases:
+        for skills_dir in get_all_skills_dirs():
+            if not skills_dir.exists():
                 continue
-            if skill_md.parent.name == name:
-                return {"path": skill_md.parent}
+            direct_path = skills_dir / alias
+            if direct_path.is_dir() and (direct_path / "SKILL.md").exists():
+                return {"path": direct_path}
+            for skill_md in skills_dir.rglob("SKILL.md"):
+                if is_excluded_skill_path(skill_md):
+                    continue
+                if skill_md.parent.name == alias:
+                    return {"path": skill_md.parent}
     return None
 
 
@@ -516,10 +571,13 @@ def _find_skill_in_other_profiles(name: str) -> List[Tuple[str, Path]]:
     Returns a list of ``(profile_name, skill_dir)`` pairs. Used to make
     the "Skill X not found" error explain when the user is editing the
     wrong profile. Empty list when no other profile has the skill (or
-    when profile discovery fails — fail-quiet, the caller falls back to
-    the plain "not found" error).
+    when profile discovery fails, the caller falls back to the plain
+    "not found" error).
     """
     matches: List[Tuple[str, Path]] = []
+    if _skill_lookup_name_error(name):
+        return matches
+    aliases = _skill_lookup_aliases(name)
     try:
         from hermes_constants import get_default_hermes_root
         from agent.skill_utils import is_excluded_skill_path
@@ -565,11 +623,20 @@ def _find_skill_in_other_profiles(name: str) -> List[Tuple[str, Path]]:
         if not skills_dir.is_dir():
             continue
         try:
-            for skill_md in skills_dir.rglob("SKILL.md"):
-                if is_excluded_skill_path(skill_md):
-                    continue
-                if skill_md.parent.name == name:
-                    matches.append((profile_name, skill_md.parent))
+            for alias in aliases:
+                direct_path = skills_dir / alias
+                if direct_path.is_dir() and (direct_path / "SKILL.md").exists():
+                    matches.append((profile_name, direct_path))
+                    break
+                found = False
+                for skill_md in skills_dir.rglob("SKILL.md"):
+                    if is_excluded_skill_path(skill_md):
+                        continue
+                    if skill_md.parent.name == alias:
+                        matches.append((profile_name, skill_md.parent))
+                        found = True
+                        break
+                if found:
                     break  # one match per profile is enough
         except OSError:
             continue
@@ -583,6 +650,10 @@ def _skill_not_found_error(name: str, suffix: str = "") -> str:
     ``suffix`` is appended after the cross-profile hint if present
     (e.g. ``" Create it first with action='create'."``).
     """
+    lookup_error = _skill_lookup_name_error(name)
+    if lookup_error:
+        return lookup_error
+
     from agent.file_safety import _resolve_active_profile_name
     active = _resolve_active_profile_name()
     base = f"Skill '{name}' not found in active profile '{active}'."

@@ -18,6 +18,8 @@ from tools.skill_manager_tool import (
     _delete_skill,
     _write_file,
     _remove_file,
+    _find_skill,
+    _skill_not_found_error,
     skill_manage,
     MAX_NAME_LENGTH,
     MAX_SKILL_CONTENT_CHARS,
@@ -259,6 +261,29 @@ class TestCreateSkill:
         assert result["success"] is False
         assert f"Invalid category '{outside}'" in result["error"]
         assert not (outside / "my-skill" / "SKILL.md").exists()
+
+
+class TestFindSkillResolution:
+    def test_bare_slash_and_colon_qualified_names_resolve_identically(self, tmp_path):
+        with _skill_dir(tmp_path):
+            _create_skill("meeting-prep", VALID_SKILL_CONTENT, category="task-skills")
+            bare = _find_skill("meeting-prep")
+            slash = _find_skill("task-skills/meeting-prep")
+            colon = _find_skill("task-skills:meeting-prep")
+
+        expected = tmp_path / "task-skills" / "meeting-prep"
+        assert bare == {"path": expected}
+        assert slash == bare
+        assert colon == bare
+
+    def test_empty_skill_name_returns_required_error_not_not_found(self, tmp_path):
+        with _skill_dir(tmp_path):
+            result = _patch_skill("", "old", "new")
+
+        assert result["success"] is False
+        assert "skill name required" in result["error"].lower()
+        assert "not found" not in result["error"].lower()
+        assert "skill name required" in _skill_not_found_error("").lower()
 
 
 class TestEditSkill:
