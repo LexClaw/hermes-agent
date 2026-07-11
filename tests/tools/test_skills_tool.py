@@ -57,6 +57,54 @@ def _symlink_category(skills_dir: Path, linked_root: Path, category: str) -> Pat
     return external_category
 
 
+
+
+class TestSkillViewResolverAliases:
+    def test_bare_slash_and_colon_forms_resolve_same_categorized_skill(self, tmp_path):
+        _make_skill(tmp_path, "alias-skill", category="category", body="Alias body.")
+
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path), patch(
+            "agent.skill_utils.get_external_skills_dirs", return_value=[]
+        ):
+            bare = json.loads(skill_view("alias-skill"))
+            slash = json.loads(skill_view("category/alias-skill"))
+            colon = json.loads(skill_view("category:alias-skill"))
+
+        assert bare["success"] is True
+        assert slash["success"] is True
+        assert colon["success"] is True
+        assert bare["skill_dir"] == slash["skill_dir"] == colon["skill_dir"]
+        assert bare["content"] == slash["content"] == colon["content"]
+
+    def test_empty_skill_view_name_returns_distinct_required_error(self, tmp_path):
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path), patch(
+            "agent.skill_utils.get_external_skills_dirs", return_value=[]
+        ):
+            result = json.loads(skill_view(""))
+
+        assert result["success"] is False
+        assert result["code"] == "skill-name-required"
+        assert "skill-name-required" in result["error"]
+
+    def test_explicit_category_path_disambiguates_duplicate_bare_names(self, tmp_path):
+        first = _make_skill(tmp_path, "alias-skill", category="first", body="First body.")
+        second = _make_skill(tmp_path, "alias-skill", category="second", body="Second body.")
+
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path), patch(
+            "agent.skill_utils.get_external_skills_dirs", return_value=[]
+        ):
+            slash = json.loads(skill_view("first/alias-skill"))
+            colon = json.loads(skill_view("first:alias-skill"))
+            bare = json.loads(skill_view("alias-skill"))
+
+        assert slash["success"] is True
+        assert colon["success"] is True
+        assert slash["skill_dir"] == colon["skill_dir"] == str(first)
+        assert slash["skill_dir"] != str(second)
+        assert bare["success"] is False
+        assert "Ambiguous skill name 'alias-skill'" in bare["error"]
+
+
 # ---------------------------------------------------------------------------
 # _parse_frontmatter
 # ---------------------------------------------------------------------------
