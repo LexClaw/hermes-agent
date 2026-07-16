@@ -24,7 +24,12 @@ CHEAP_QWEN_MARKERS = (
 )
 
 
-def active_profile_name() -> str:
+def active_profile_name(agent: Any = None) -> str:
+    """Resolve the profile that owns a runtime fallback event."""
+    for attr in ("profile_name", "agent_profile"):
+        value = getattr(agent, attr, None) if agent is not None else None
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
     home = get_hermes_home().expanduser().resolve()
     if home.parent.name == "profiles":
         return home.name.lower()
@@ -75,19 +80,6 @@ def _is_tier_rs(agent_name: str, provider: str, model: str) -> bool:
     return any(marker in text for marker in TIER_RS_MODELS)
 
 
-def _tier_rs_default_chain(provider: str, model: str, config: Dict[str, Any]) -> List[Dict[str, str]]:
-    raw_strong = config.get("fallback_strong")
-    strong: Dict[str, Any] = raw_strong if isinstance(raw_strong, dict) else {}
-    strong_provider = str(strong.get("provider") or "openrouter")
-    strong_model = str(strong.get("model") or "openai/gpt-5.5")
-    chain = [
-        {"provider": "anthropic", "model": "claude-sonnet-4-6"},
-        {"provider": strong_provider, "model": strong_model},
-    ]
-    current = (provider.lower(), model)
-    return [item for item in chain if (item["provider"].lower(), item["model"]) != current]
-
-
 def resolve_per_agent_fallback_chain(
     *,
     provider: str,
@@ -109,7 +101,10 @@ def resolve_per_agent_fallback_chain(
     if policy_chain:
         return policy_chain
     if _is_tier_rs(name, provider, model):
-        return _tier_rs_default_chain(provider, model, cfg)
+        # Tier-R/S must have an explicit canonical route.  Do not synthesize a
+        # cross-provider default here: historical defaults were exactly how a
+        # Grant or legal run could silently reach OpenRouter/qwen.
+        return []
     if isinstance(explicit_fallback, list):
         return [
             {k: str(v) for k, v in item.items() if v is not None}
@@ -140,7 +135,7 @@ def telemetry_event(agent: Any, *, from_provider: str, from_model: str, to_provi
         "session_id": session_id,
         "job_id": infer_job_id(session_id),
         "source": source,
-        "agent_profile": active_profile_name(),
+        "agent_profile": active_profile_name(agent),
         "from_provider": from_provider,
         "from_model": from_model,
         "to_provider": to_provider,

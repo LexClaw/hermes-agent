@@ -37,7 +37,7 @@ def test_per_agent_fallback_policy_uses_workspace_config(monkeypatch, tmp_path):
     assert chain == [{"provider": "anthropic", "model": "claude-opus-4-8"}]
 
 
-def test_tier_rs_default_fallback_never_uses_qwen(monkeypatch, tmp_path):
+def test_tier_rs_default_fallback_fails_loud_without_canonical_route(monkeypatch, tmp_path):
     home = tmp_path / ".hermes" / "profiles" / "grant"
     cfg_dir = tmp_path / ".hermes" / "workspace" / "config"
     cfg_dir.mkdir(parents=True)
@@ -55,8 +55,7 @@ def test_tier_rs_default_fallback_never_uses_qwen(monkeypatch, tmp_path):
         explicit_fallback={"provider": "openrouter", "model": "qwen/qwen3.6-plus"},
     )
 
-    assert chain
-    assert not any(is_cheap_qwen(item["provider"], item["model"]) for item in chain)
+    assert chain == []
 
 
 def test_forced_fallback_records_jsonl_and_state_db(monkeypatch, tmp_path):
@@ -133,3 +132,48 @@ def test_forced_fallback_records_jsonl_and_state_db(monkeypatch, tmp_path):
     db_rows = db.list_model_fallback_events()
     assert db_rows[0]["session_id"] == "sess1"
     assert db_rows[0]["to_model"] == "openai/gpt-5.5"
+
+
+def test_grant_verdict_lane_uses_its_canonical_codex_fallback(monkeypatch, tmp_path):
+    home = tmp_path / ".hermes" / "profiles" / "grant"
+    cfg_dir = tmp_path / ".hermes" / "workspace" / "config"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "model-config.json").write_text(json.dumps({
+        "grant": {
+            "provider": "openai-codex",
+            "model": "gpt-5.6-terra",
+            "fallback_provider": "openai-codex",
+            "fallback_model": "gpt-5.6-terra",
+        },
+    }))
+    monkeypatch.setenv("HERMES_HOME", str(home))
+
+    from agent.model_fallback_policy import resolve_per_agent_fallback_chain, is_cheap_qwen
+
+    chain = resolve_per_agent_fallback_chain(
+        provider="openai-codex",
+        model="gpt-5.6-sol",
+        explicit_fallback={"provider": "openrouter", "model": "qwen/qwen3.6-plus"},
+    )
+
+    assert chain == [{"provider": "openai-codex", "model": "gpt-5.6-terra"}]
+    assert not any(is_cheap_qwen(item["provider"], item["model"]) for item in chain)
+
+
+def test_unnamed_tier_rs_runtime_fails_loud_without_canonical_policy(monkeypatch, tmp_path):
+    home = tmp_path / ".hermes"
+    cfg_dir = home / "workspace" / "config"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "model-config.json").write_text("{}")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.delenv("HERMES_AGENT_PROFILE", raising=False)
+
+    from agent.model_fallback_policy import resolve_per_agent_fallback_chain
+
+    chain = resolve_per_agent_fallback_chain(
+        provider="anthropic",
+        model="claude-opus-4-8",
+        explicit_fallback={"provider": "openrouter", "model": "qwen/qwen3.6-plus"},
+    )
+
+    assert chain == []
