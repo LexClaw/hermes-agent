@@ -847,15 +847,32 @@ def skill_view(
         JSON string with skill content or error message
     """
     try:
+        raw_name = str(name or "").strip()
+        if not raw_name:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": "skill-name-required: Provide a skill name.",
+                    "code": "skill-name-required",
+                },
+                ensure_ascii=False,
+            )
+
+        name = raw_name
         local_category_name: str | None = None
+        colon_category_name: str | None = None
         # ── Qualified name dispatch (plugin skills) ──────────────────
-        # Names containing ':' are routed to the plugin skill registry.
-        # Bare names fall through to the existing flat-tree scan below.
+        # Names containing ':' are first routed to the plugin skill registry.
+        # If no plugin skill matches, ``category:skill`` falls through to the
+        # local categorized skill resolver and is treated like
+        # ``category/skill``.
         if ":" in name:
             from agent.skill_utils import is_valid_namespace, parse_qualified_name
             from hermes_cli.plugins import discover_plugins, get_plugin_manager
 
             namespace, bare = parse_qualified_name(name)
+            if bare:
+                colon_category_name = f"{namespace}/{bare}"
             if not is_valid_namespace(namespace):
                 return json.dumps(
                     {
@@ -957,34 +974,38 @@ def skill_view(
             candidates.append((sd, smd))
 
         for search_dir in all_dirs:
-            # Strategy 1: direct path (e.g., "mlops/axolotl" or bare "axolotl"
-            # at the top of the dir).
-            direct_path = search_dir / name
-            if direct_path.is_dir() and (direct_path / "SKILL.md").exists():
-                _record(direct_path, direct_path / "SKILL.md")
-            elif direct_path.with_suffix(".md").exists():
-                _record(None, direct_path.with_suffix(".md"))
+            lookup_paths = [name]
+            for alias in (colon_category_name, local_category_name):
+                if alias and alias not in lookup_paths:
+                    lookup_paths.append(alias)
 
-            # Strategy 1b: categorized form for plugin namespace fall-through
-            # (e.g., a "myplugin:explore" name with no plugin registered also
-            # tries the on-disk path "myplugin/explore").
-            if local_category_name:
-                categorized_path = search_dir / local_category_name
-                if categorized_path.is_dir() and (categorized_path / "SKILL.md").exists():
-                    _record(categorized_path, categorized_path / "SKILL.md")
-                elif categorized_path.with_suffix(".md").exists():
-                    _record(None, categorized_path.with_suffix(".md"))
+            # Strategy 1: direct path (e.g., "mlops/axolotl" or bare "axolotl"
+            # at the top of the dir). ``category:skill`` aliases are included
+            # as their ``category/skill`` path so both separators resolve the
+            # same local skill.
+            for lookup_path in lookup_paths:
+                direct_path = search_dir / lookup_path
+                if direct_path.is_dir() and (direct_path / "SKILL.md").exists():
+                    _record(direct_path, direct_path / "SKILL.md")
+                elif direct_path.with_suffix(".md").exists():
+                    _record(None, direct_path.with_suffix(".md"))
 
             # Strategy 2: recursive by directory name (catches nested skills
             # like "foundations/runtime/explore-codebase" called by bare name).
-            for found_skill_md in iter_skill_index_files(search_dir, "SKILL.md"):
-                if found_skill_md.parent.name == name:
-                    _record(found_skill_md.parent, found_skill_md)
+            # Only bare inputs use the recursive fallback; explicit
+            # category/skill and category:skill forms are already handled by
+            # direct path lookup above and should not become ambiguous when a
+            # different category contains the same leaf skill name.
+            if "/" not in name and ":" not in name:
+                for found_skill_md in iter_skill_index_files(search_dir, "SKILL.md"):
+                    if found_skill_md.parent.name == name:
+                        _record(found_skill_md.parent, found_skill_md)
 
             # Strategy 3: legacy flat <name>.md files anywhere under the dir.
-            for found_md in search_dir.rglob(f"{name}.md"):
-                if found_md.name != "SKILL.md":
-                    _record(None, found_md)
+            for lookup_path in lookup_paths:
+                for found_md in search_dir.rglob(f"{lookup_path}.md"):
+                    if found_md.name != "SKILL.md":
+                        _record(None, found_md)
 
         if len(candidates) > 1:
             paths = [str(smd) for _, smd in candidates]

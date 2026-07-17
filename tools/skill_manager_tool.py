@@ -275,6 +275,24 @@ def _resolve_skill_dir(name: str, category: str = None) -> Path:
     return SKILLS_DIR / name
 
 
+def _skill_lookup_aliases(name: str) -> Tuple[str, ...]:
+    """Return equivalent skill identifiers for manager lookups.
+
+    Bare names, ``category/skill``, and ``category:skill`` should all target
+    the same on-disk skill. The bare alias is always the final path segment; the
+    slash alias lets exact categorized paths work without relying on a scan.
+    """
+    normalized = str(name or "").strip().strip("/")
+    if not normalized:
+        return ()
+    slash_form = normalized.replace(":", "/", 1) if ":" in normalized else normalized
+    aliases = [slash_form]
+    bare = Path(slash_form).name
+    if bare and bare not in aliases:
+        aliases.append(bare)
+    return tuple(aliases)
+
+
 def _find_skill(name: str) -> Optional[Dict[str, Any]]:
     """
     Find a skill by name across all skill directories.
@@ -284,13 +302,25 @@ def _find_skill(name: str) -> Optional[Dict[str, Any]]:
     {"path": Path} or None.
     """
     from agent.skill_utils import get_all_skills_dirs, is_excluded_skill_path
+
+    aliases = _skill_lookup_aliases(name)
+    if not aliases:
+        return None
+
     for skills_dir in get_all_skills_dirs():
         if not skills_dir.exists():
             continue
+
+        for alias in aliases:
+            direct = skills_dir / alias
+            if direct.is_dir() and (direct / "SKILL.md").exists():
+                return {"path": direct}
+
+        bare_aliases = {Path(alias).name for alias in aliases}
         for skill_md in skills_dir.rglob("SKILL.md"):
             if is_excluded_skill_path(skill_md):
                 continue
-            if skill_md.parent.name == name:
+            if skill_md.parent.name in bare_aliases:
                 return {"path": skill_md.parent}
     return None
 
@@ -830,6 +860,10 @@ def skill_manage(
 
     Returns JSON string with results.
     """
+    name = str(name or "").strip()
+    if not name:
+        return tool_error("skill-name-required: Provide a skill name.", success=False)
+
     if action == "create":
         if not content:
             return tool_error("content is required for 'create'. Provide the full SKILL.md text (frontmatter + body).", success=False)

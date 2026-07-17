@@ -12,6 +12,7 @@ from tools.skill_manager_tool import (
     _validate_category,
     _validate_frontmatter,
     _validate_file_path,
+    _find_skill,
     _create_skill,
     _edit_skill,
     _patch_skill,
@@ -105,6 +106,31 @@ class TestValidateCategory:
     def test_absolute_path_rejected(self):
         err = _validate_category("/tmp/escape")
         assert "Invalid category '/tmp/escape'" in err
+
+
+
+
+class TestFindSkillResolverAliases:
+    def test_bare_slash_and_colon_forms_resolve_same_skill(self, tmp_path):
+        skill_dir = tmp_path / "category" / "alias-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(VALID_SKILL_CONTENT, encoding="utf-8")
+
+        with _skill_dir(tmp_path):
+            bare = _find_skill("alias-skill")
+            slash = _find_skill("category/alias-skill")
+            colon = _find_skill("category:alias-skill")
+
+        assert bare == {"path": skill_dir}
+        assert slash == {"path": skill_dir}
+        assert colon == {"path": skill_dir}
+
+    def test_empty_skill_manage_name_returns_distinct_required_error(self, tmp_path):
+        with _skill_dir(tmp_path):
+            result = json.loads(skill_manage("patch", "", old_string="x", new_string="y"))
+
+        assert result["success"] is False
+        assert "skill-name-required" in result["error"]
 
 
 # ---------------------------------------------------------------------------
